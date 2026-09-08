@@ -1,0 +1,86 @@
+# ==============================================================================
+# VMP Suite - Git Ignore Rules
+# ==============================================================================
+
+# Build directories & outputs
+build/
+*/build/
+bin/
+lib/
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+
+# Executables if built in place
+vmp
+vmp_engine
+vmp_desktop
+vmp_cli
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+CTestTestfile.cmake
+install_manifest.txt
+
+# Secrets, Credentials, and Environment files
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+id_rsa*
+*.secret
+
+# IDE and Editor configurations
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+.directory
+Desktop.ini
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Local runtime & test artifacts
+*.log
+*.json.bak
+report.json
+telemetry.json
+.vmp_resume.json
+*.bmp
+
+# Media files (do not commit test video/audio samples to repo)
+*.mp4
+*.mkv
+*.webm
+*.avi
+*.mov
+*.flv
+*.ts
+*.m2ts
+
+# Crash & Core dumps
+core
+core.*

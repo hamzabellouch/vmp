@@ -1,0 +1,18 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=VMP Video Player
+GenericName=Video Media Player
+Comment=VMP - Ultra-native high-performance HDR video player
+Exec=vmp_engine %F
+Icon=vmp
+Terminal=false
+Categories=AudioVideo;Video;Player;
+MimeType=video/mp4;video/x-matroska;video/webm;video/quicktime;video/x-msvideo;video/x-flv;video/ogg;video/mp2t;video/x-ms-wmv;
+Keywords=Video;Player;Media;Movie;Film;VMP;
+StartupNotify=true
+Actions=OpenWelcome;
+
+[Desktop Action OpenWelcome]
+Name=Open VMP Player
+Exec=vmp_engine
