@@ -259,7 +259,7 @@ int main(int argc, char** argv) {
         } else if (arg == "--force-hw" || arg == "--vaapi") {
             setenv("VMP_HW_ACCEL", "vaapi", 1);
         } else if (arg == "--version" || arg == "-v") {
-            std::cout << "\nVMP Suite v0.0.2-beta (Linux x86_64)" << std::endl;
+            std::cout << "\nVMP v0.0.2-beta (Linux x86_64)" << std::endl;
             std::cout << "Ultra-Native High-Performance Video Max Player Engine" << std::endl;
             std::cout << "Version: v0.0.2-beta (Beta Preview)" << std::endl;
             std::cout << "Standard: C++20 | Optimizations: AVX2, FMA, LTO" << std::endl;

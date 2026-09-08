@@ -395,13 +395,13 @@ vmp_cli resume --clear
 
 
 
-## Technical Comparison: VMP Suite vs. VLC Media Player
+## Technical Comparison: VMP vs. VLC Media Player
 
 Tested on native Linux x86_64 playing high-bitrate 4K 60FPS / 120FPS video streams (VP9 / AV1 / H.265):
 
 ### Quick Performance Overview
 
-| Metric | VLC Media Player (v3.0.x) | VMP Suite v0.0.2-beta | Improvement |
+| Metric | VLC Media Player (v3.0.x) | VMP v0.0.2-beta | Improvement |
 | :--- | :--- | :--- | :--- |
 | **Startup / First Frame Latency** | ~280 ms | **42 ms** | **6.6× faster** |
 | **4K 120 FPS Frame Stability** | Drops frames under load | **0 Frame Drops (Locked)** | **Zero stutter** |
@@ -411,7 +411,7 @@ Tested on native Linux x86_64 playing high-bitrate 4K 60FPS / 120FPS video strea
 
 ### In-Depth Technical & Architectural Comparison
 
-| Technical Dimension | VMP Suite v0.0.2-beta | VLC Media Player (v3.0.x) | Technical & Architectural Analysis |
+| Technical Dimension | VMP v0.0.2-beta | VLC Media Player (v3.0.x) | Technical & Architectural Analysis |
 | :--- | :--- | :--- | :--- |
 | **4K 60FPS / 120FPS Playback Smoothness** | **55–60 FPS (and up to 120 FPS) locked**, completely stutter-free | **Initial micro-stuttering and frame drops** accompanied by buffer allocation warnings | VMP achieves absolute stability via smart decoder routing and a deep frame cache queue. |
 | **Hardware Decoding Behavior (HW Decode)** | **Smart Auto-Routing**: Automatically detects GPU memory bus / driver bottlenecks on 4K streams and seamlessly falls back to optimized multi-threaded AVX2 CPU decode without crashing | Attempts blind VA-API allocation, triggering:<br>`[vp9] get_buffer() failed`<br>`thread_get_buffer() failed` | In VLC, the user must stop playback and manually disable hardware acceleration in preferences; VMP handles driver edge-cases automatically. |

@@ -522,7 +522,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (command == "--version" || command == "-v" || command == "version") {
-        std::cout << Color::CYAN << Color::BOLD << "VMP Suite v0.0.2-beta (Linux x86_64)\n" << Color::RESET
+        std::cout << Color::CYAN << Color::BOLD << "VMP v0.0.2-beta (Linux x86_64)\n" << Color::RESET
                   << "Ultra-Native High-Performance Video Max Player & Benchmark CLI\n"
                   << "Version: v0.0.2-beta (Beta Preview)\n"
                   << "Standard: C++20 | Optimizations: AVX2, FMA, LTO\n"
