@@ -6,9 +6,8 @@
 High-performance C++20 media engine for 4K/8K/16K video playback, hardware-accelerated decoding, and zero-drop rendering.
 </p>
 
-<div align="center">
-  <img src="https://github.com/hamzabellouch/vmp/blob/main/desktop/assets/icons/vmp_app_icon.png" width="800"/>
-</div>
+<img width="1365" height="768" alt="vmp" src="https://github.com/user-attachments/assets/47a6ee68-85d5-4829-a2b7-ea068471183f" />
+
 
 ## Overview
 
