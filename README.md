@@ -1,4 +1,4 @@
-# VMP Suite v0.0.2-beta - Ultra-Native Linux Video Max Player
+# VMP - Video Max Player
 
 High-performance **C++20** media engine and benchmarking suite designed specifically for **Linux** to play high-bitrate videos (up to 4K / 8K / 16K) with maximum framerate, zero frame drops, microsecond-accurate audio synchronization, and no web/Electron overhead.
 
