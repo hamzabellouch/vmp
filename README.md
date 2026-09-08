@@ -1,12 +1,26 @@
-# VMP - Video Max Player
+# VMP
 
-High-performance **C++20** media engine and benchmarking suite designed specifically for **Linux** to play high-bitrate videos (up to 4K / 8K / 16K) with maximum framerate, zero frame drops, microsecond-accurate audio synchronization, and no web/Electron overhead.
+<h3 align="center">Ultra-Native Linux Video Max Player & Benchmarking Suite</h3>
 
-> ⚠️ **Important:** VMP (Video Max Player) is **dedicated strictly to video playback**. It does not support opening or viewing static images. Image file inputs are immediately rejected with exit code `1` to prevent overriding your system's default image viewer.
+<p align="center">
+High-performance C++20 media engine for 4K/8K/16K video playback, hardware-accelerated decoding, and zero-drop rendering.
+</p>
 
----
+<div align="center">
+  <img src="https://github.com/hamzabellouch/vmp/blob/main/desktop/assets/icons/vmp_app_icon.png" width="800"/>
+</div>
 
-## 📁 Repository Directory Structure
+## Overview
+
+VMP (Video Max Player) is an advanced, ultra-native video playback and benchmarking suite engineered in **C++20** specifically for **Linux**. It combines high-throughput graphical video rendering with headless CLI decoding telemetry and benchmarking.
+
+The platform is designed to help video engineers, performance analysts, developers, and power users achieve maximum framerate, zero dropped frames, microsecond-accurate audio synchronization, and real-time shader processing on extreme high-bitrate streams (up to 4K / 8K / 16K) without web or Electron overhead.
+
+Currently available for Linux OS (Ubuntu, Debian, Kali Linux, Parrot OS, Fedora, Arch Linux, openSUSE, and headless server environments).
+
+
+
+## Repository Directory Structure
 
 The project is cleanly separated into two standalone, modular sub-projects:
 
@@ -39,36 +53,73 @@ VMP/
 │
 ├── CMakeLists.txt       # Root build orchestrator (builds both targets)
 ├── README.md            # Markdown documentation (Linux installation & guide)
-└── README.txt           # Plain-text documentation
+└── LICENSE              # MIT License
 ```
 
----
 
-## 🚀 Key Features
 
-1. **Strictly Video-Only:**
-   - Image viewing code removed. Opening images via CLI or GUI exits immediately with code 1.
-   - System MIME associations for images are protected from being overridden.
-2. **Modular & Independent Architecture:**
-   - The CLI target builds without any GUI or OpenGL/GLFW libraries (ideal for headless servers and containers).
-   - The Desktop application builds independently with hardware decoding and custom shaders.
-3. **Hardware Acceleration & Seamless Fallback:**
-   - Auto-detection and decoding via VA-API (Intel/AMD) and NVDEC/CUDA (NVIDIA).
-   - Real-time keyboard toggle (`Shift+H`) between Hardware Acceleration and Multi-Threaded AVX2 CPU engine.
-4. **VLC-Style Interface & Controls:**
-   - Top menu bar (`Media`, `Audio`, `Video`, `Subtitle`, `Tools`, `View`, `Help`) and right-click context menu.
-   - Smooth seek bar with hover timeline preview thumbnails, volume scroll, and fullscreen mode.
-5. **Post-Processing Shaders:**
-   - HDR Tone Mapping (ACES Filmic), GPU Contrast-Adaptive Sharpening (CAS), Warm/Cool color grading, and Retro CRT filter.
-6. **Audio & Subtitle Precision:**
-   - Microsecond-accurate audio synchronization driven by SDL2.
-   - Advanced SSA/ASS/SRT subtitle styling, multi-track selection, and automatic playback position resumption.
+## Key Features
 
----
+### Dual Playback & Auditing Engines
 
-## 📦 System Dependencies & Prerequisites
+Switch between targeted automation and deep graphical playback:
 
-Before building or installing, ensure your Linux system has the required build tools and media libraries installed.
+* **VMP Desktop (GUI)**: Modern OpenGL 3.3 Core Profile video player with full VLC-style controls, GLSL post-processing shaders, and timeline preview thumbnails
+* **VMP CLI (Headless)**: Standalone command-line tool for video probing, speed benchmarks, telemetry reporting, and hardware decoder discovery with zero GUI dependencies
+
+### Hardware Acceleration & Smart Routing
+
+Intelligent decoder routing designed for rock-solid stability under load:
+
+* **GPU Hardware Decoding**: Auto-detection and native hardware decoding via VA-API (Intel/AMD) and NVDEC/CUDA (NVIDIA)
+* **Hot-Toggle Decoding (`Shift+H`)**: Instant real-time switching between GPU Hardware Acceleration and Multi-Threaded AVX2 CPU decode without stopping playback
+* **Smart Fallback Mechanism**: Automatically detects driver/bus bottlenecks on extreme 4K/8K streams and falls back to AVX2 CPU decode to prevent player crashes
+* **Deep Dynamic Ring Buffer**: 64 to 96 frames raw decoded buffer queue to completely eliminate stuttering and frame drops during multitasking
+* **Zero Frame Drops**: Locked 55–60 FPS and up to 120+ FPS playback stability on native Linux x86_64
+
+### Post-Processing Shader Pipeline
+
+Custom modern GLSL post-processing filters rendered in real-time (`S` key):
+
+* **HDR Tone Mapping**: ACES Filmic tone mapping for vibrant dynamic range representation
+* **Contrast-Adaptive Sharpening (CAS)**: GPU-accelerated edge sharpening for ultra-crisp details
+* **Color Grading & Filters**: Warm, Cool, and retro CRT scanline emulation filters
+
+### Audio Synchronization & Subtitle Precision
+
+* **Microsecond-Accurate Clock**: ±0.3 ms audio synchronization powered by SDL2 audio engine (28× tighter sync than standard players)
+* **Advanced Subtitle Rendering**: SSA/ASS/SRT subtitle styling, multi-track switching (`C`), and FriBidi bidirectional text support
+* **Automatic Resume Manager**: Remembers playback timestamps across sessions and supports instant resumption
+
+### Telemetry & Benchmarking Suite
+
+* **Real-Time Telemetry HUD (`T`)**: On-screen display showing active FPS, 1% Low FPS, per-frame latency in ms, video bitrate, and decoder engine
+* **Headless Benchmark Engine**: Measure unlocked decoding throughput (144+ FPS) across thousands of frames with JSON telemetry export (`--export-stats`)
+* **Hardware API Discovery**: Command-line audit tool (`vmp_cli hw-accel`) to query all available decoding backends on the host
+
+### Dedicated Video Specialization
+
+* **Strictly Video-Only**: Dedicated strictly to video playback; static image files are instantly rejected to safeguard default image viewers
+* **MIME Association Safety**: Automatically registers video formats while protecting desktop image viewing associations
+* **Modular Architecture**: CLI builds independently without any GUI or OpenGL/GLFW libraries
+
+
+
+## Screenshots
+
+Add screenshots here.
+
+```text
+screenshots/1
+screenshots/2
+screenshots/3
+```
+
+
+
+## System Dependencies & Prerequisites
+
+Before building or installing, ensure your Linux system has the required build tools and media libraries installed:
 
 ### 1. Ubuntu / Debian / Kali Linux / Linux Mint / Pop!_OS:
 ```bash
@@ -102,9 +153,9 @@ sudo zypper install gcc-c++ cmake pkg-config \
                     Mesa-libGL-devel freetype-devel fribidi-devel libva-devel
 ```
 
----
 
-## 🛠️ Build Options
+
+## Build Options
 
 ### Option 1: Unified Build from Root (CLI + Desktop)
 ```bash
@@ -112,9 +163,9 @@ cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
 Generates:
-- `./build/cli/vmp_cli`
-- `./build/desktop/vmp_engine` (and `./build/desktop/vmp`, `./build/desktop/vmp_desktop`)
-- `./build/desktop/libvmp.so`
+* `./build/cli/vmp_cli`
+* `./build/desktop/vmp_engine` (and `./build/desktop/vmp`, `./build/desktop/vmp_desktop`)
+* `./build/desktop/libvmp.so`
 
 ### Option 2: Standalone CLI Build (Headless, Zero GUI Dependencies)
 ```bash
@@ -123,7 +174,7 @@ cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
 Generates:
-- `./cli/build/vmp_cli`
+* `./cli/build/vmp_cli`
 
 ### Option 3: Standalone Desktop Build (GUI & Shared Library)
 ```bash
@@ -132,16 +183,12 @@ cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
 Generates:
-- `./desktop/build/vmp_engine`
-- `./desktop/build/libvmp.so`
+* `./desktop/build/vmp_engine`
+* `./desktop/build/libvmp.so`
 
----
 
-## 📥 Installation on Linux
 
-VMP provides two flexible installation methods: the **Desktop GUI Application** (for regular desktop use) and the **CLI Tool** (for headless servers, scripts, and terminal power users).
-
----
+## Installation & Running
 
 ### 1. Desktop Application Installation
 
@@ -164,11 +211,7 @@ chmod +x install.sh
 6. Explicitly protects default image viewers (eog, ristretto, gwenview) by removing any conflicting image associations.
 7. Installs `vmp_cli` and symlink `vmp-cli` into `~/.local/bin/`.
 
----
-
 #### Method B: Manual Desktop Installation
-
-If you prefer to install manually or customize paths:
 
 ```bash
 # 1. Build the Desktop application
@@ -240,17 +283,15 @@ sudo ln -sf /usr/local/bin/vmp_cli /usr/local/bin/vmp-cli
 
 ### 3. Verifying Installation
 
-Verify that VMP is properly recognized by your system:
-
 - **Check CLI:**
   ```bash
   vmp_cli --help
   vmp_cli hw-accel
   ```
 - **Check Desktop App:**
-  - Launch from Applications Menu: Search for **"VMP"**.
-  - Launch from Desktop: Double-click **VMP.desktop**.
-  - Launch from Terminal:
+  * Launch from Applications Menu: Search for **"VMP"**.
+  * Launch from Desktop: Double-click **VMP.desktop**.
+  * Launch from Terminal:
     ```bash
     vmp_engine /path/to/video.mp4
     ```
@@ -279,9 +320,9 @@ update-desktop-database ~/.local/share/applications 2>/dev/null || true
 gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor 2>/dev/null || true
 ```
 
----
 
-## 💻 Usage Guide
+
+## Usage Guide
 
 ### 1. Desktop Application
 
@@ -352,9 +393,9 @@ vmp_cli resume --list
 vmp_cli resume --clear
 ```
 
----
 
-## ⚖️ Technical Comparison: VMP Suite v0.0.2-beta vs. VLC Media Player
+
+## Technical Comparison: VMP Suite vs. VLC Media Player
 
 Tested on native Linux x86_64 playing high-bitrate 4K 60FPS / 120FPS video streams (VP9 / AV1 / H.265):
 
@@ -367,8 +408,6 @@ Tested on native Linux x86_64 playing high-bitrate 4K 60FPS / 120FPS video strea
 | **Audio Clock Jitter** | ±8.5 ms | **±0.3 ms (Microsecond sync)** | **28× tighter sync** |
 | **Max Decoding Throughput** | N/A (No built-in CLI benchmark) | **144.5+ FPS** | **Benchmarking tool included** |
 | **Decoder Flexibility** | Fixed decoder settings | **Hot-toggle HW ↔ CPU (`Shift+H`)** | **Instant runtime switch** |
-
----
 
 ### In-Depth Technical & Architectural Comparison
 
@@ -386,8 +425,40 @@ Tested on native Linux x86_64 playing high-bitrate 4K 60FPS / 120FPS video strea
 | **Startup Latency & Architecture** | **~42 ms startup latency**: Modular **C++20** codebase with zero plugin overhead or heavy frameworks | **~280 ms startup latency**: Monolithic architecture relying on legacy Qt5 GUI and hundreds of dynamic plugins | VMP initializes near-instantly with a lightweight, clean dependency graph. |
 | **Core Specialization & Scope** | **Dedicated exclusively to high-resolution, high-framerate video playback and benchmarking** | General-purpose media player (DVDs, network streaming, audio playback, transcoding) | VLC serves as a general-purpose Swiss Army knife; VMP is an ultra-native high-performance video engine. |
 
----
 
-## 📜 License
 
-Distributed under the MIT License. See `LICENSE` for more information.
+## Requirements
+
+* Root privileges (`sudo`) for system dependency installation
+* Linux OS (Ubuntu, Debian, Kali Linux, Parrot OS, Fedora, Arch Linux, openSUSE)
+* C++20 compliant compiler (`g++` >= 10 or `clang++` >= 11) and CMake (>= 3.16)
+* Compatible hardware acceleration drivers (VA-API / Intel Media Driver / NVIDIA CUDA / Mesa)
+* Recommended libraries: `libavcodec`, `libavformat`, `libswscale`, `libswresample`, `libavutil`, `libsdl2`, `libglfw3`, `mesa`, `libfreetype`, `libfribidi`, `libva`
+
+
+
+## Workflow
+
+1. Run VMP Desktop or execute VMP CLI with a target video file.
+2. Select or auto-detect an execution engine:
+
+   * **VMP Desktop**: Interactive OpenGL GUI video player
+   * **VMP CLI**: Headless metadata probe, benchmarking, and telemetry engine
+3. Play video with automated hardware acceleration (VA-API / NVDEC) or switch in real-time (`Shift+H`) to Multi-Threaded AVX2 CPU.
+4. Toggle GLSL post-processing shaders (`S`) or monitor live performance telemetry (`T`).
+5. Export benchmarking and session statistics using `--export-stats report.json`.
+
+
+
+> [!WARNING]
+> VMP (Video Max Player) is strictly dedicated to high-performance video playback. It does not support opening or viewing static images. Image file inputs are immediately rejected with exit code `1` to prevent overriding your system's default image viewer. We assume no responsibility for any misuse or unsupported file overrides.
+
+
+### <a name="Copyright©2026"></a> Copyright © 2026
+
+Thank you for engaging with us. For inquiries or collaboration, please contact:  
+hamzabellouchcontact@gmail.com
+
+Stay connected and follow us on:  
+[Facebook](https://facebook.com/hamzabellouch1) | [Instagram](https://instagram.com/hamzabellouch0) | [Twitter](https://twitter.com/hamzabellouch0) | [Telegram](https://t.me/hammzabellouch) | [LinkedIn](https://www.linkedin.com/in/hamzabellouch)
+
