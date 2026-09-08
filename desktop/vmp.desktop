@@ -1,18 +1,19 @@
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=VMP Video Player
-GenericName=Video Media Player
-Comment=VMP - Ultra-native high-performance HDR video player
+Name=VMP
+GenericName=Video Max Player
+Comment=VMP v0.0.2-beta - Ultra-native high-performance HDR video player
 Exec=vmp_engine %F
 Icon=vmp
 Terminal=false
 Categories=AudioVideo;Video;Player;
 MimeType=video/mp4;video/x-matroska;video/webm;video/quicktime;video/x-msvideo;video/x-flv;video/ogg;video/mp2t;video/x-ms-wmv;
-Keywords=Video;Player;Media;Movie;Film;VMP;
+Keywords=Video;Player;Media;Movie;Film;VMP;Oculus;
 StartupNotify=true
+StartupWMClass=vmp
 Actions=OpenWelcome;
 
 [Desktop Action OpenWelcome]
-Name=Open VMP Player
+Name=Open VMP
 Exec=vmp_engine

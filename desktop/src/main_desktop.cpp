@@ -14,6 +14,7 @@
 #include "resume_manager.h"
 #include "thumbnail_generator.h"
 #include "material_icons_data.h"
+#include "app_icon_data.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -233,7 +234,7 @@ static void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 
 int main(int argc, char** argv) {
     std::cout << "============================================================" << std::endl;
-    std::cout << "       VMP ENGINE v2.0 - Video Media Player Platform     " << std::endl;
+    std::cout << "      VMP ENGINE v0.0.2-beta - Video Max Player Platform    " << std::endl;
     std::cout << "  High-Performance | Audio Sync | HDR Shaders | Telemetry   " << std::endl;
     std::cout << "============================================================" << std::endl;
 
@@ -246,9 +247,31 @@ int main(int argc, char** argv) {
                 export_filepath = argv[i + 1];
                 i++;
             }
+        } else if (arg == "--hw-accel") {
+            if (i + 1 < argc) {
+                std::string mode_str = argv[i + 1];
+                setenv("VMP_HW_ACCEL", mode_str.c_str(), 1);
+                i++;
+            }
+        } else if (arg == "--no-hw" || arg == "--cpu") {
+            setenv("VMP_HW_ACCEL", "cpu", 1);
+            setenv("VMP_FORCE_CPU", "1", 1);
+        } else if (arg == "--force-hw" || arg == "--vaapi") {
+            setenv("VMP_HW_ACCEL", "vaapi", 1);
+        } else if (arg == "--version" || arg == "-v") {
+            std::cout << "\nVMP Suite v0.0.2-beta (Linux x86_64)" << std::endl;
+            std::cout << "Ultra-Native High-Performance Video Max Player Engine" << std::endl;
+            std::cout << "Version: v0.0.2-beta (Beta Preview)" << std::endl;
+            std::cout << "Standard: C++20 | Optimizations: AVX2, FMA, LTO" << std::endl;
+            std::cout << "Graphics: OpenGL 3.3 Core Profile | Audio: SDL2" << std::endl;
+            std::cout << "Decoders: FFmpeg libavcodec + VA-API / NVDEC + AVX2 Multi-Thread" << std::endl;
+            std::cout << "License: MIT" << std::endl;
+            return 0;
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "\n[Usage]: vmp_engine [path_to_video_file] [options]" << std::endl;
+            std::cout << "         vmp_engine sample.mp4 --hw-accel <auto|vaapi|cuda|cpu>" << std::endl;
             std::cout << "         vmp_engine sample.mp4 --export-stats report.json" << std::endl;
+            std::cout << "         vmp_engine --version" << std::endl;
             return 0;
         } else {
             if (is_image_file(arg)) {
@@ -283,19 +306,70 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(1024, 576, "VMP - Video Media Player", NULL, NULL);
+    // Set window class and instance hints so that window managers and taskbars/panels (X11 & Wayland)
+    // associate the window with vmp.desktop rather than defaulting to the window title ("VMP").
+    // This ensures the app icon remains consistent and does not change or revert to default when multiple windows are open and grouped.
+#if defined(GLFW_X11_CLASS_NAME) && defined(GLFW_X11_INSTANCE_NAME)
+    glfwWindowHintString(GLFW_X11_CLASS_NAME, "vmp");
+    glfwWindowHintString(GLFW_X11_INSTANCE_NAME, "vmp");
+#endif
+#if defined(GLFW_WAYLAND_APP_ID)
+    glfwWindowHintString(GLFW_WAYLAND_APP_ID, "vmp");
+#endif
+
+    GLFWwindow* window = glfwCreateWindow(1024, 576, "VMP", NULL, NULL);
     if (!window) {
         std::cerr << "[VMP Error] Failed to create OpenGL Window!" << std::endl;
         glfwTerminate();
         return -1;
     }
 
-    // Set Window Icon
-    GLFWimage app_icon;
-    app_icon.width = ICON_SIZE;
-    app_icon.height = ICON_SIZE;
-    app_icon.pixels = const_cast<unsigned char*>(ICON_PLAY_RGBA);
-    glfwSetWindowIcon(window, 1, &app_icon);
+    // Set Window Icon with multiple resolutions (128, 64, 48, 32, 16)
+    // for crisp display across taskbars, alt-tab switchers, and window decorations
+    auto downsample_rgba_box = [](const uint8_t* src, int src_w, int src_h, int dst_w, int dst_h) -> std::vector<uint8_t> {
+        std::vector<uint8_t> dst(dst_w * dst_h * 4);
+        for (int y = 0; y < dst_h; y++) {
+            int y0 = (y * src_h) / dst_h;
+            int y1 = ((y + 1) * src_h) / dst_h;
+            if (y1 <= y0) y1 = y0 + 1;
+            for (int x = 0; x < dst_w; x++) {
+                int x0 = (x * src_w) / dst_w;
+                int x1 = ((x + 1) * src_w) / dst_w;
+                if (x1 <= x0) x1 = x0 + 1;
+                uint32_t r = 0, g = 0, b = 0, a = 0;
+                int count = 0;
+                for (int sy = y0; sy < y1; sy++) {
+                    for (int sx = x0; sx < x1; sx++) {
+                        int idx = (sy * src_w + sx) * 4;
+                        r += src[idx + 0];
+                        g += src[idx + 1];
+                        b += src[idx + 2];
+                        a += src[idx + 3];
+                        count++;
+                    }
+                }
+                int dst_idx = (y * dst_w + x) * 4;
+                dst[dst_idx + 0] = (uint8_t)(r / count);
+                dst[dst_idx + 1] = (uint8_t)(g / count);
+                dst[dst_idx + 2] = (uint8_t)(b / count);
+                dst[dst_idx + 3] = (uint8_t)(a / count);
+            }
+        }
+        return dst;
+    };
+
+    std::vector<uint8_t> icon_64 = downsample_rgba_box(VMP_APP_ICON_RGBA, 128, 128, 64, 64);
+    std::vector<uint8_t> icon_48 = downsample_rgba_box(VMP_APP_ICON_RGBA, 128, 128, 48, 48);
+    std::vector<uint8_t> icon_32 = downsample_rgba_box(VMP_APP_ICON_RGBA, 128, 128, 32, 32);
+    std::vector<uint8_t> icon_16 = downsample_rgba_box(VMP_APP_ICON_RGBA, 128, 128, 16, 16);
+
+    GLFWimage app_icons[5];
+    app_icons[0] = { VMP_APP_ICON_SIZE, VMP_APP_ICON_SIZE, const_cast<unsigned char*>(VMP_APP_ICON_RGBA) };
+    app_icons[1] = { 64, 64, icon_64.data() };
+    app_icons[2] = { 48, 48, icon_48.data() };
+    app_icons[3] = { 32, 32, icon_32.data() };
+    app_icons[4] = { 16, 16, icon_16.data() };
+    glfwSetWindowIcon(window, 5, app_icons);
 
     int windowed_x = 100, windowed_y = 100;
     int windowed_w = 1024, windowed_h = 576;
@@ -328,6 +402,11 @@ int main(int argc, char** argv) {
 
     bool is_fullscreen = false;
     int active_menu_idx = -1;
+    bool context_menu_active = false;
+    float context_menu_x = 0.0f;
+    float context_menu_y = 0.0f;
+    int context_submenu_idx = -1;
+    bool mouse_right_prev = false;
 
     auto get_window_monitor_fn = [](GLFWwindow* win) -> GLFWmonitor* {
         int wx, wy, ww, wh;
@@ -356,6 +435,8 @@ int main(int argc, char** argv) {
 
     auto toggle_fullscreen_fn = [&](GLFWwindow* win) {
         active_menu_idx = -1;
+        context_menu_active = false;
+        context_submenu_idx = -1;
         if (!is_fullscreen) {
             glfwGetWindowPos(win, &windowed_x, &windowed_y);
             glfwGetWindowSize(win, &windowed_w, &windowed_h);
@@ -397,9 +478,10 @@ int main(int argc, char** argv) {
             video_h = 720;
         }
 
-        // Proportional comfortable medium bounds: ~70% to 75% max of monitor workarea
+        float menu_bar_h = 26.0f;
+        // Proportional comfortable medium bounds: ~70% to 75% max of monitor workarea (accounting for menu bar)
         float max_target_w = static_cast<float>(work_w) * 0.75f;
-        float max_target_h = static_cast<float>(work_h) * 0.75f;
+        float max_target_h = std::max(200.0f, static_cast<float>(work_h) * 0.75f - menu_bar_h);
         float min_target_w = std::min(640.0f, static_cast<float>(work_w) * 0.5f);
         float min_target_h = std::min(360.0f, static_cast<float>(work_h) * 0.5f);
 
@@ -418,8 +500,12 @@ int main(int argc, char** argv) {
             }
         }
 
-        int final_w = std::max(320, static_cast<int>(std::round(target_w)));
-        int final_h = std::max(180, static_cast<int>(std::round(target_h)));
+        int final_video_w = std::max(320, static_cast<int>(std::round(target_w)));
+        int final_video_h = std::max(180, static_cast<int>(std::round(target_h)));
+
+        // Window height includes the 26px menu bar so the video retains its exact, full resolution and aspect ratio!
+        int final_w = final_video_w;
+        int final_h = final_video_h + static_cast<int>(menu_bar_h);
 
         int pos_x = work_x + (work_w - final_w) / 2;
         int pos_y = work_y + (work_h - final_h) / 2;
@@ -432,8 +518,9 @@ int main(int argc, char** argv) {
         glfwSetWindowSize(window, final_w, final_h);
         glfwSetWindowPos(window, pos_x, pos_y);
 
-        std::cout << "[VMP Engine] Window Centered & Scaled to: " 
-                  << final_w << "x" << final_h << " at (" << pos_x << ", " << pos_y << ")" << std::endl;
+        std::cout << "[VMP Engine] Window Centered & Scaled: Video Area " 
+                  << final_video_w << "x" << final_video_h << " (Window " << final_w << "x" << final_h << " with Menu Bar) at (" 
+                  << pos_x << ", " << pos_y << ")" << std::endl;
     };
 
     ThumbnailGenerator thumb_gen;
@@ -459,6 +546,7 @@ int main(int argc, char** argv) {
         }
         
         player.close_file();
+        renderer.clear_video_frame();
         thumb_gen.stop();
         
         if (!player.open_file(current_filepath)) {
@@ -470,7 +558,7 @@ int main(int argc, char** argv) {
         video_size = get_file_size_string(current_filepath);
         video_date = get_file_date_string(current_filepath);
         
-        // Start background thumbnail generator
+        // Start low-overhead background thumbnail generator
         thumb_gen.start_generation(current_filepath, player.get_duration());
 
         // Find and load all available subtitles (ASS, SSA, SRT)
@@ -690,6 +778,13 @@ int main(int argc, char** argv) {
                     active_menu_idx = hovered_menu;
                 }
             }
+            // If context menu is open, hovering over another category switches to it
+            if (context_menu_active) {
+                int hovered_cat = renderer.hit_test_vlc_context_menu_category(width, height, mx, my, context_menu_x, context_menu_y);
+                if (hovered_cat >= 0) {
+                    context_submenu_idx = hovered_cat;
+                }
+            }
         }
 
         auto handle_vlc_menu_action_fn = [&](VlcMenuAction action) {
@@ -813,7 +908,7 @@ int main(int argc, char** argv) {
                     break;
                 }
                 case VlcMenuAction::HELP_ABOUT: {
-                    osd_notification = "VMP v2.0 - Video Media Player";
+                    osd_notification = "VMP v0.0.2-beta - Video Max Player";
                     osd_notification_time = now;
                     break;
                 }
@@ -823,6 +918,36 @@ int main(int argc, char** argv) {
         };
 
         auto check_vlc_menu_click_fn = [&]() -> bool {
+            if (context_menu_active) {
+                if (context_submenu_idx >= 0) {
+                    float card_w = 170.0f;
+                    float card_h = 8.0f * 26.0f + 8.0f;
+                    float root_x = std::max(4.0f, std::min(context_menu_x, static_cast<float>(width) - card_w - 10.0f));
+                    float root_y = std::max(4.0f, std::min(context_menu_y, static_cast<float>(height) - card_h - 10.0f));
+                    float sub_x = root_x + card_w + 2.0f;
+                    if (sub_x + 260.0f > static_cast<float>(width)) sub_x = root_x - 262.0f;
+                    float sub_y = root_y + 4.0f + static_cast<float>(context_submenu_idx) * 26.0f;
+
+                    VlcMenuAction action = renderer.hit_test_vlc_dropdown(width, height, mx, my, context_submenu_idx, sub_x, sub_y);
+                    if (action != VlcMenuAction::NONE) {
+                        handle_vlc_menu_action_fn(action);
+                        context_menu_active = false;
+                        context_submenu_idx = -1;
+                        return true;
+                    }
+                }
+
+                int cat = renderer.hit_test_vlc_context_menu_category(width, height, mx, my, context_menu_x, context_menu_y);
+                if (cat >= 0) {
+                    context_submenu_idx = cat;
+                    return true;
+                }
+
+                context_menu_active = false;
+                context_submenu_idx = -1;
+                return true;
+            }
+
             if (is_fullscreen) return false;
             int clicked_top = renderer.hit_test_vlc_menu_bar(width, height, mx, my);
             if (clicked_top >= 0) {
@@ -1013,18 +1138,37 @@ int main(int argc, char** argv) {
                 mouse_left_prev = false;
             }
 
+            if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
+                if (!mouse_right_prev) {
+                    active_menu_idx = -1;
+                    context_menu_active = true;
+                    context_menu_x = static_cast<float>(mx);
+                    context_menu_y = static_cast<float>(my);
+                    context_submenu_idx = -1;
+                    mouse_right_prev = true;
+                }
+            } else if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_RELEASE) {
+                mouse_right_prev = false;
+            }
+
             renderer.render_welcome_screen(width, height, mx, my);
             if (!is_fullscreen) {
-                renderer.render_vlc_menu_bar(width, height, mx, my, active_menu_idx, 1.0f, "");
+                renderer.render_vlc_menu_bar(width, height, mx, my, active_menu_idx, 1.0f);
                 if (active_menu_idx >= 0) {
                     renderer.render_vlc_dropdown(width, height, mx, my, active_menu_idx);
                 }
+            }
+            if (context_menu_active) {
+                renderer.render_vlc_context_menu(width, height, mx, my, context_menu_x, context_menu_y, context_submenu_idx);
             }
             glfwSwapBuffers(window);
             glfwPollEvents();
 
             if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-                if (active_menu_idx >= 0) {
+                if (context_menu_active) {
+                    context_menu_active = false;
+                    context_submenu_idx = -1;
+                } else if (active_menu_idx >= 0) {
                     active_menu_idx = -1;
                 } else if (is_fullscreen) {
                     toggle_fullscreen_fn(window);
@@ -1097,18 +1241,37 @@ int main(int argc, char** argv) {
                 mouse_left_prev = false;
             }
 
+            if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
+                if (!mouse_right_prev) {
+                    active_menu_idx = -1;
+                    context_menu_active = true;
+                    context_menu_x = static_cast<float>(mx);
+                    context_menu_y = static_cast<float>(my);
+                    context_submenu_idx = -1;
+                    mouse_right_prev = true;
+                }
+            } else if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_RELEASE) {
+                mouse_right_prev = false;
+            }
+
             renderer.render_folder_gallery(width, height, mx, my, current_folder_path, folder_media_items, gallery_scroll_offset, is_fullscreen);
             if (!is_fullscreen) {
-                renderer.render_vlc_menu_bar(width, height, mx, my, active_menu_idx, 1.0f, current_folder_path);
+                renderer.render_vlc_menu_bar(width, height, mx, my, active_menu_idx, 1.0f);
                 if (active_menu_idx >= 0) {
                     renderer.render_vlc_dropdown(width, height, mx, my, active_menu_idx);
                 }
+            }
+            if (context_menu_active) {
+                renderer.render_vlc_context_menu(width, height, mx, my, context_menu_x, context_menu_y, context_submenu_idx);
             }
             glfwSwapBuffers(window);
             glfwPollEvents();
 
             if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-                if (active_menu_idx >= 0) {
+                if (context_menu_active) {
+                    context_menu_active = false;
+                    context_submenu_idx = -1;
+                } else if (active_menu_idx >= 0) {
                     active_menu_idx = -1;
                 } else if (is_fullscreen) {
                     toggle_fullscreen_fn(window);
@@ -1162,19 +1325,33 @@ int main(int argc, char** argv) {
         float bar_w = (fs_x - 15.0f) - bar_x;
         float bar_y = center_y;
 
+        if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
+            last_user_activity = now;
+            if (!mouse_right_prev) {
+                active_menu_idx = -1;
+                context_menu_active = true;
+                context_menu_x = static_cast<float>(mx);
+                context_menu_y = static_cast<float>(my);
+                context_submenu_idx = -1;
+                mouse_right_prev = true;
+            }
+        } else if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_RELEASE) {
+            mouse_right_prev = false;
+        }
+
         if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
             last_user_activity = now;
             if (!mouse_left_prev) {
-                bool menu_clickable = !is_fullscreen;
-                if (menu_clickable && check_vlc_menu_click_fn()) {
-                    // Handled by VLC menu bar
+                if (check_vlc_menu_click_fn()) {
+                    // Handled by VLC menu bar or context menu
                 }
-                // Check click on BACK button (at top-right)
-                else if (mx >= back_btn_x && mx <= back_btn_x + back_btn_w && my >= back_btn_y && my <= back_btn_y + back_btn_h) {
+                // Check click on BACK button (at top-right, only in windowed mode)
+                else if (!is_fullscreen && mx >= back_btn_x && mx <= back_btn_x + back_btn_w && my >= back_btn_y && my <= back_btn_y + back_btn_h) {
                     if (!video_filename.empty() && current_file_idx < playlist_files.size()) {
                         ResumeManager::get_instance().save_position(playlist_files[current_file_idx], player.get_current_time(), player.get_duration());
                     }
                     player.close_file();
+                    renderer.clear_video_frame();
                     thumb_gen.stop();
                     video_filename.clear();
                     if (!folder_media_items.empty()) {
@@ -1187,8 +1364,8 @@ int main(int argc, char** argv) {
                 else if (mx >= fs_x - 12.0f && mx <= fs_x + icon_size + 12.0f && my >= fs_y - 12.0f && my <= fs_y + icon_size + 12.0f) {
                     toggle_fullscreen_fn(window);
                 }
-                // Check click on Stats button icon (at top-right, left of BACK)
-                else if (mx >= stats_x - 10.0f && mx <= stats_x + icon_size + 10.0f && my >= stats_y - 10.0f && my <= stats_y + icon_size + 10.0f) {
+                // Check click on Stats button icon (at top-right, left of BACK, only in windowed mode)
+                else if (!is_fullscreen && mx >= stats_x - 10.0f && mx <= stats_x + icon_size + 10.0f && my >= stats_y - 10.0f && my <= stats_y + icon_size + 10.0f) {
                     show_stats = !show_stats;
                     std::cout << "[VMP Engine] Toggle Stats Display: " << (show_stats ? "ON" : "OFF") << std::endl;
                 }
@@ -1331,12 +1508,34 @@ int main(int argc, char** argv) {
         if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) { current_zoom = std::max(0.2f, current_zoom - 0.02f); last_user_activity = now; }
         if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) { current_zoom = 1.0f; pan_x = 0.0f; pan_y = 0.0f; last_user_activity = now; }
 
+        bool shift_held = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS);
+
         if (glfwGetKey(window, GLFW_KEY_H) == GLFW_PRESS && !h_pressed_prev) {
-            hdr_toggle = !hdr_toggle;
-            renderer.set_hdr_tone_mapping(hdr_toggle);
-            osd_notification = hdr_toggle ? "HDR: ON" : "HDR: OFF";
-            osd_notification_time = now;
-            std::cout << "\n[VMP Engine] HDR Tone Mapping: " << (hdr_toggle ? "ENABLED" : "DISABLED") << std::endl;
+            if (shift_held) {
+                // Shift+H: Cycle Hardware Acceleration Mode (AUTO -> FORCE_CPU -> FORCE_HW -> AUTO)
+                auto cur_hw = player.get_hw_accel_mode();
+                if (cur_hw == VideoPlayer::HWAccelMode::AUTO) {
+                    player.set_hw_accel_mode(VideoPlayer::HWAccelMode::FORCE_CPU);
+                    osd_notification = "Decoder: CPU Multi-Threaded Engine (AVX2)";
+                } else if (cur_hw == VideoPlayer::HWAccelMode::FORCE_CPU) {
+                    player.set_hw_accel_mode(VideoPlayer::HWAccelMode::FORCE_HW);
+                    osd_notification = "Decoder: Hardware Acceleration (VAAPI/CUDA)";
+                } else {
+                    player.set_hw_accel_mode(VideoPlayer::HWAccelMode::AUTO);
+                    osd_notification = "Decoder: AUTO (Smart Routing)";
+                }
+                osd_notification_time = now;
+                std::cout << "\n[VMP Engine] " << osd_notification << std::endl;
+                if (current_file_idx < playlist_files.size()) {
+                    load_playlist_file_fn(current_file_idx);
+                }
+            } else {
+                hdr_toggle = !hdr_toggle;
+                renderer.set_hdr_tone_mapping(hdr_toggle);
+                osd_notification = hdr_toggle ? "HDR: ON" : "HDR: OFF";
+                osd_notification_time = now;
+                std::cout << "\n[VMP Engine] HDR Tone Mapping: " << (hdr_toggle ? "ENABLED" : "DISABLED") << std::endl;
+            }
             last_user_activity = now;
             h_pressed_prev = true;
         } else if (glfwGetKey(window, GLFW_KEY_H) == GLFW_RELEASE) {
@@ -1385,7 +1584,6 @@ int main(int argc, char** argv) {
         }
 
         // Aspect Ratio Override cycle (W key or Shift+A)
-        bool shift_held = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS);
         bool w_pressed_now = (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS || (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS && shift_held));
         if (w_pressed_now && !w_pressed_prev) {
             ShaderRenderer::AspectRatioMode cur_aspect = renderer.get_aspect_ratio_mode();
@@ -1735,7 +1933,9 @@ int main(int argc, char** argv) {
             eof_handled = false;
         }
 
-        player.render_current_frame(renderer, width, height);
+        auto t_loop_start = std::chrono::high_resolution_clock::now();
+        player.render_current_frame(renderer, width, height, !is_fullscreen);
+        auto t_render_done = std::chrono::high_resolution_clock::now();
 
         // Fetch active subtitle (with user delay offset)
         std::string active_sub = "";
@@ -1759,11 +1959,20 @@ int main(int argc, char** argv) {
                                    active_sub, active_note);
 
         if (!is_fullscreen) {
-            renderer.render_vlc_menu_bar(width, height, mx, my, active_menu_idx, 1.0f, video_filename);
+            renderer.render_vlc_menu_bar(width, height, mx, my, active_menu_idx, 1.0f);
             if (active_menu_idx >= 0) {
                 renderer.render_vlc_dropdown(width, height, mx, my, active_menu_idx);
             }
         }
+        if (context_menu_active) {
+            renderer.render_vlc_context_menu(width, height, mx, my, context_menu_x, context_menu_y, context_submenu_idx);
+        }
+        auto t_ui_done = std::chrono::high_resolution_clock::now();
+
+        auto t_swap_start = std::chrono::high_resolution_clock::now();
+        glfwSwapBuffers(window);
+        auto t_swap_done = std::chrono::high_resolution_clock::now();
+        glfwPollEvents();
 
         if (std::chrono::duration<double>(now - last_title_update).count() >= 0.2) {
             double elapsed_sec = std::chrono::duration<double>(now - start_time_global).count();
@@ -1772,22 +1981,30 @@ int main(int argc, char** argv) {
 
             std::string status_str = player.is_paused() ? "PAUSED ❚❚" : "PLAYING ▶";
             std::string time_str = format_time(player.get_current_time(), has_hours) + " / " + format_time(player.get_duration(), has_hours);
-            std::string title = "VMP - " + video_filename;
+            std::string title = video_filename.empty() ? "VMP" : (video_filename + " - VMP");
             glfwSetWindowTitle(window, title.c_str());
+
+            double ms_render = std::chrono::duration<double, std::milli>(t_render_done - t_loop_start).count();
+            double ms_ui = std::chrono::duration<double, std::milli>(t_ui_done - t_render_done).count();
+            double ms_swap = std::chrono::duration<double, std::milli>(t_swap_done - t_swap_start).count();
 
             std::cout << "\r[VMP Status] " << status_str << " | Time: " << time_str
                       << " | FPS: " << std::setw(3) << static_cast<int>(stats.fps)
-                      << " | DecTime: " << std::fixed << std::setprecision(1) << stats.decode_time_ms << " ms" << std::flush;
+                      << " | Dec: " << std::fixed << std::setprecision(1) << stats.decode_time_ms << "ms"
+                      << " | Rnd: " << ms_render << "ms"
+                      << " | UI: " << ms_ui << "ms"
+                      << " | Swp: " << ms_swap << "ms"
+                      << " | Buf: " << stats.buffered_frames << std::flush;
 
             last_title_update = now;
         }
 
-        glfwSwapBuffers(window);
-        glfwPollEvents();
-
         bool esc_pressed_now = (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS);
         if (esc_pressed_now && !esc_pressed_prev) {
-            if (active_menu_idx >= 0) {
+            if (context_menu_active) {
+                context_menu_active = false;
+                context_submenu_idx = -1;
+            } else if (active_menu_idx >= 0) {
                 active_menu_idx = -1;
             } else if (is_fullscreen) {
                 toggle_fullscreen_fn(window);
@@ -1796,8 +2013,10 @@ int main(int argc, char** argv) {
                     ResumeManager::get_instance().save_position(playlist_files[current_file_idx], player.get_current_time(), player.get_duration());
                 }
                 player.close_file();
+                renderer.clear_video_frame();
                 thumb_gen.stop();
                 video_filename.clear();
+                glfwSetWindowTitle(window, "VMP");
                 if (!folder_media_items.empty()) {
                     app_state = AppState::FOLDER_GALLERY;
                 } else {

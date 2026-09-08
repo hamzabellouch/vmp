@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
-project(VMPCLI VERSION 2.0.0 LANGUAGES C CXX)
+project(VMPCLI VERSION 0.0.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-add_compile_definitions(VMP_HEADLESS_CLI)
+add_compile_definitions(VMP_HEADLESS_CLI OCULUS_HEADLESS_CLI)
 
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -77,4 +77,10 @@ target_link_libraries(vmp_cli
     ${SDL2_LIBRARIES}
     pthread
     dl
+)
+
+# Compatibility symlinks: oculus_cli -> vmp_cli
+add_custom_target(oculus_cli ALL
+    COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE_NAME:vmp_cli> ${CMAKE_CURRENT_BINARY_DIR}/oculus_cli
+    DEPENDS vmp_cli
 )

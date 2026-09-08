@@ -28,12 +28,26 @@ std::string ResumeManager::get_storage_path() {
             if (!std::filesystem::exists(config_dir)) {
                 std::filesystem::create_directories(config_dir);
             }
-            return config_dir + "/vmp_resume.json";
+            std::string vmp_path = config_dir + "/vmp_resume.json";
+            std::string oculus_path = config_dir + "/oculus_resume.json";
+            if (!std::filesystem::exists(vmp_path) && std::filesystem::exists(oculus_path)) {
+                try {
+                    std::filesystem::copy_file(oculus_path, vmp_path);
+                } catch (...) {}
+            }
+            return vmp_path;
         } catch (...) {
             // fallback
         }
     }
-    return ".vmp_resume.json";
+    std::string vmp_local = ".vmp_resume.json";
+    std::string oculus_local = ".oculus_resume.json";
+    if (!std::filesystem::exists(vmp_local) && std::filesystem::exists(oculus_local)) {
+        try {
+            std::filesystem::copy_file(oculus_local, vmp_local);
+        } catch (...) {}
+    }
+    return vmp_local;
 }
 
 void ResumeManager::load_from_disk() {

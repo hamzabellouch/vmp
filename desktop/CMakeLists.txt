@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(VMPDesktop VERSION 2.0.0 LANGUAGES C CXX)
+project(VMPDesktop VERSION 0.0.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -101,6 +101,8 @@ target_link_libraries(vmp_engine
 add_custom_target(vmp_desktop ALL
     COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE_NAME:vmp_engine> ${CMAKE_CURRENT_BINARY_DIR}/vmp_desktop
     COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE_NAME:vmp_engine> ${CMAKE_CURRENT_BINARY_DIR}/vmp
+    COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE_NAME:vmp_engine> ${CMAKE_CURRENT_BINARY_DIR}/oculus_engine
+    COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE_NAME:vmp_engine> ${CMAKE_CURRENT_BINARY_DIR}/oculus_desktop
     DEPENDS vmp_engine
 )
 

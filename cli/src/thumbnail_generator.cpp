@@ -58,7 +58,9 @@ void ThumbnailGenerator::generate_loop() {
     AVStream* st = fmt_ctx->streams[video_stream_idx];
     AVCodecContext* codec_ctx = avcodec_alloc_context3(decoder);
     avcodec_parameters_to_context(codec_ctx, st->codecpar);
-    codec_ctx->thread_count = 1; // 1 thread is enough for background thumbnail downscaling
+    codec_ctx->thread_count = 1; // 1 low-priority worker thread
+    codec_ctx->flags2 |= AV_CODEC_FLAG2_FAST;
+    codec_ctx->skip_frame = AVDISCARD_NONREF;
     
     if (avcodec_open2(codec_ctx, decoder, NULL) < 0) {
         avcodec_free_context(&codec_ctx);
@@ -138,8 +140,8 @@ void ThumbnailGenerator::generate_loop() {
             av_packet_unref(packet);
         }
         
-        // Small throttle sleep between thumbnail extractions to preserve CPU cycles
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        // Throttle sleep between thumbnail extractions to keep playback 100% smooth
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
     if (sws_ctx) sws_freeContext(sws_ctx);

@@ -74,7 +74,7 @@ static std::string get_file_size_string(uintmax_t size) {
 static void print_banner() {
     std::cout << Color::CYAN << Color::BOLD
               << "============================================================\n"
-              << "     VMP CLI v2.0 - Video Media Player CLI     \n"
+              << "   VMP CLI v0.0.2-beta - Video Max Player CLI       \n"
               << "   Probe Info | Hardware Acceleration | Telemetry Benchmark \n"
               << "============================================================\n"
               << Color::RESET;
@@ -88,10 +88,11 @@ static void print_help(const char* prog_name) {
               << "  " << Color::GREEN << "info <video_file>" << Color::RESET 
               << "\n      Display comprehensive technical metadata (codecs, tracks, streams, bitrates).\n\n"
               << "  " << Color::GREEN << "benchmark <video_file> [options]" << Color::RESET 
-              << "\n      Run headless video decoding speed test and measure average/1% low FPS.\n"
               << "      Options:\n"
               << "        --frames <N>           Limit benchmark to N frames (default: all or 1000)\n"
               << "        --duration <sec>       Limit benchmark to duration in seconds\n"
+              << "        --hw-accel <mode>      Decoder mode: auto, vaapi, cuda, cpu (default: auto)\n"
+              << "        --cpu, --no-hw         Force multi-threaded AVX2 CPU engine\n"
               << "        --export-stats <file>  Export telemetry data and latency to JSON report\n\n"
               << "  " << Color::GREEN << "hw-accel" << Color::RESET 
               << "\n      Probe and list hardware decoding APIs supported on the current host system.\n\n"
@@ -328,7 +329,7 @@ static int cmd_resume(const std::vector<std::string>& args) {
 }
 
 // 4. Command: benchmark
-static int cmd_benchmark(const std::string& filepath, int max_frames, double max_duration_sec, const std::string& export_json) {
+static int cmd_benchmark(const std::string& filepath, int max_frames, double max_duration_sec, const std::string& export_json, const std::string& hw_mode_str = "auto") {
     if (is_image_file(filepath)) {
         std::cerr << Color::RED << "[VMP CLI Error] Image files are not supported: " << filepath 
                   << " (VMP is dedicated to video playback only)\n" << Color::RESET;
@@ -368,16 +369,36 @@ static int cmd_benchmark(const std::string& filepath, int max_frames, double max
     codec_ctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
 
     HardwareDecoder hw_dec;
-    std::string hw_status = "Multi-Threaded CPU Engine";
-    auto hw_devices = hw_dec.get_supported_hw_devices();
-    for (const auto& dev_name : hw_devices) {
-        enum AVHWDeviceType type = av_hwdevice_find_type_by_name(dev_name.c_str());
-        if (type != AV_HWDEVICE_TYPE_NONE) {
-            if (hw_dec.init_hardware_context(codec_ctx, type)) {
-                hw_status = "ENABLED (" + dev_name + ")";
-                break;
+    std::string hw_status = "Multi-Threaded CPU Engine (AVX2)";
+    std::string mode_lower = hw_mode_str;
+    for (char& c : mode_lower) c = std::tolower(c);
+
+    bool force_cpu = (mode_lower == "cpu" || mode_lower == "none" || mode_lower == "off" || mode_lower == "0");
+    bool force_hw = (mode_lower == "vaapi" || mode_lower == "cuda" || mode_lower == "hw" || mode_lower == "force");
+
+    bool is_4k_vp9_av1 = (st->codecpar->width >= 3840 || st->codecpar->height >= 2160) &&
+                         (decoder->id == AV_CODEC_ID_VP9 || decoder->id == AV_CODEC_ID_AV1);
+
+    bool try_hw = force_hw || (!force_cpu && !is_4k_vp9_av1);
+
+    if (try_hw) {
+        auto hw_devices = hw_dec.get_supported_hw_devices();
+        for (const auto& dev_name : hw_devices) {
+            if (force_hw && mode_lower != "hw" && mode_lower != "force" && dev_name != mode_lower) {
+                continue;
+            }
+            enum AVHWDeviceType type = av_hwdevice_find_type_by_name(dev_name.c_str());
+            if (type != AV_HWDEVICE_TYPE_NONE) {
+                if (hw_dec.init_hardware_context(codec_ctx, type)) {
+                    hw_status = "ENABLED (" + dev_name + ")";
+                    break;
+                }
             }
         }
+    }
+
+    if (hw_status == "Multi-Threaded CPU Engine (AVX2)" && is_4k_vp9_av1 && !force_cpu && !force_hw) {
+        hw_status = "AUTO-ROUTED -> Multi-Threaded CPU Engine (4K Bus Readback Bypass)";
     }
 
     if (avcodec_open2(codec_ctx, decoder, nullptr) < 0) {
@@ -395,6 +416,7 @@ static int cmd_benchmark(const std::string& filepath, int max_frames, double max
     TelemetryExporter telemetry;
     AVPacket* packet = av_packet_alloc();
     AVFrame* frame = av_frame_alloc();
+    AVFrame* sw_frame = av_frame_alloc();
 
     int frames_decoded = 0;
     auto bench_start = std::chrono::high_resolution_clock::now();
@@ -405,6 +427,13 @@ static int cmd_benchmark(const std::string& filepath, int max_frames, double max
             auto frame_t0 = std::chrono::high_resolution_clock::now();
             if (avcodec_send_packet(codec_ctx, packet) >= 0) {
                 while (avcodec_receive_frame(codec_ctx, frame) >= 0) {
+                    if (frame->hw_frames_ctx != nullptr ||
+                        frame->format == AV_PIX_FMT_VAAPI ||
+                        frame->format == AV_PIX_FMT_CUDA ||
+                        frame->format == AV_PIX_FMT_VDPAU) {
+                        av_hwframe_transfer_data(sw_frame, frame, 0);
+                        av_frame_unref(sw_frame);
+                    }
                     auto frame_t1 = std::chrono::high_resolution_clock::now();
                     double lat_ms = std::chrono::duration<double, std::milli>(frame_t1 - frame_t0).count();
                     decode_latencies_ms.push_back(lat_ms);
@@ -470,6 +499,7 @@ static int cmd_benchmark(const std::string& filepath, int max_frames, double max
         }
     }
 
+    av_frame_free(&sw_frame);
     av_frame_free(&frame);
     av_packet_free(&packet);
     avcodec_free_context(&codec_ctx);
@@ -488,6 +518,15 @@ int main(int argc, char* argv[]) {
 
     if (command == "--help" || command == "-h" || command == "help") {
         print_help(argv[0]);
+        return 0;
+    }
+
+    if (command == "--version" || command == "-v" || command == "version") {
+        std::cout << Color::CYAN << Color::BOLD << "VMP Suite v0.0.2-beta (Linux x86_64)\n" << Color::RESET
+                  << "Ultra-Native High-Performance Video Max Player & Benchmark CLI\n"
+                  << "Version: v0.0.2-beta (Beta Preview)\n"
+                  << "Standard: C++20 | Optimizations: AVX2, FMA, LTO\n"
+                  << "License: MIT\n";
         return 0;
     }
 
@@ -520,6 +559,7 @@ int main(int argc, char* argv[]) {
         int max_frames = 1000;
         double max_duration = 10.0;
         std::string export_json = "";
+        std::string hw_mode = "auto";
 
         for (int i = 3; i < argc; i++) {
             std::string a = argv[i];
@@ -529,9 +569,13 @@ int main(int argc, char* argv[]) {
                 max_duration = std::atof(argv[++i]);
             } else if (a == "--export-stats" && i + 1 < argc) {
                 export_json = argv[++i];
+            } else if (a == "--hw-accel" && i + 1 < argc) {
+                hw_mode = argv[++i];
+            } else if (a == "--cpu" || a == "--no-hw") {
+                hw_mode = "cpu";
             }
         }
-        return cmd_benchmark(video_file, max_frames, max_duration, export_json);
+        return cmd_benchmark(video_file, max_frames, max_duration, export_json, hw_mode);
     }
 
     // Backward compatibility fallback: `vmp_cli <video_file> [--export-stats <file>]`
@@ -545,7 +589,7 @@ int main(int argc, char* argv[]) {
             }
         }
         if (!export_json.empty()) {
-            return cmd_benchmark(video_file, 1000, 10.0, export_json);
+            return cmd_benchmark(video_file, 1000, 10.0, export_json, "auto");
         } else {
             return cmd_info(video_file);
         }

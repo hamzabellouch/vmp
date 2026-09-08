@@ -1,4 +1,4 @@
-# VMP (Video Media Player) - Desktop Application
+# VMP (Video Max Player) v0.0.2-beta - Desktop Application
 
 Ultra-native, high-performance Linux desktop video player with hardware decoding (VA-API/NVDEC), OpenGL HDR tone mapping, custom shaders, real-time telemetry, and VLC-style menu controls.
 

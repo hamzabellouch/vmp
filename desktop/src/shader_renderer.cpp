@@ -64,11 +64,14 @@ uniform float uSaturation;
 
 // Sample YUV/RGB to standard linear RGB color
 vec3 sample_rgb(vec2 uv) {
-    if (formatMode == 0) {
-        // Planar YUV420P / YUV420P10 (BT.709 or BT.2020 if enableHDR)
-        float y = (texture(texY, uv).r - 0.062745) * 1.16438;
-        float u = (texture(texU, uv).r - 0.5) * 1.13839;
-        float v = (texture(texV, uv).r - 0.5) * 1.13839;
+    if (formatMode == 0 || formatMode == 3) {
+        // Planar YUV420P (8-bit) or YUV420P10 (10-bit planar)
+        // 10-bit samples are in 0..1023; when uploaded to GL_R16, GL divides by 65535,
+        // so scaling by (65535.0 / 1023.0) ~ 64.06158 restores the [0, 1] range.
+        float scale = (formatMode == 3) ? 64.06158 : 1.0;
+        float y = (clamp(texture(texY, uv).r * scale, 0.0, 1.0) - 0.062745) * 1.16438;
+        float u = (clamp(texture(texU, uv).r * scale, 0.0, 1.0) - 0.5) * 1.13839;
+        float v = (clamp(texture(texV, uv).r * scale, 0.0, 1.0) - 0.5) * 1.13839;
 
         if (enableHDR) {
             // BT.2020 Limited to RGB Matrix
@@ -118,11 +121,30 @@ vec3 apply_cas(vec2 uv) {
     vec3 w = sample_rgb(uv + vec2(-inv_size.x, 0.0));
     vec3 e = sample_rgb(uv + vec2(inv_size.x, 0.0));
 
-    vec3 min_rgb = min(c, min(min(n, s), min(w, e)));
-    vec3 max_rgb = max(c, max(max(n, s), max(w, e)));
+    // Perceived luminance coefficients (BT.709) for consistent edge contrast
+    const vec3 luma_weights = vec3(0.2126, 0.7152, 0.0722);
+    float c_luma = dot(c, luma_weights);
+    float n_luma = dot(n, luma_weights);
+    float s_luma = dot(s, luma_weights);
+    float w_luma = dot(w, luma_weights);
+    float e_luma = dot(e, luma_weights);
 
-    vec3 amp = clamp(min(min_rgb, 1.0 - max_rgb) / (max_rgb - min_rgb + 0.0001), 0.0, 1.0);
-    vec3 w_cas = -sqrt(amp) * (sharpnessStrength * 0.25);
+    float min_luma = min(c_luma, min(min(n_luma, s_luma), min(w_luma, e_luma)));
+    float max_luma = max(c_luma, max(max(n_luma, s_luma), max(w_luma, e_luma)));
+    float diff = max_luma - min_luma;
+
+    // Noise and subtle gradient floor: prevent amplifying smooth fog, smoke, gradients,
+    // and compression block boundaries into coarse artifacts.
+    if (diff < 0.008) {
+        return c;
+    }
+
+    // Adaptive contrast weight based on distance to limits
+    float amp = clamp(min(min_luma, 1.0 - max_luma) / (diff + 0.0001), 0.0, 1.0);
+    // Smooth transition near noise floor to avoid harsh transition lines
+    float fade = smoothstep(0.008, 0.04, diff);
+    // Max sharpening weight clamped cleanly to prevent ringing and denominator collapse
+    float w_cas = -sqrt(amp) * (sharpnessStrength * 0.18) * fade;
 
     vec3 sharp_rgb = (c + (n + s + w + e) * w_cas) / (1.0 + 4.0 * w_cas);
     return clamp(sharp_rgb, 0.0, 1.0);
@@ -357,8 +379,46 @@ bool ShaderRenderer::init_gl_shaders() {
     setup_tex(v_texture);
     setup_tex(uv_texture);
 
+    clear_video_frame();
+
     std::cout << "[VMP Engine] Advanced GLSL NV12/YUV & HDR Tone Mapping Loaded." << std::endl;
     return true;
+}
+
+void ShaderRenderer::clear_video_frame() {
+    has_video_frame = false;
+    current_width = 0;
+    current_height = 0;
+    allocated_width = 0;
+    allocated_height = 0;
+    allocated_format = -1;
+
+    // Reset textures with 1x1 black pixels (Y=16, U=128, V=128 in YUV space = Pure RGB Black)
+    // This provides an impenetrable guard against green-screen artifacts in case of uninitialized sampling.
+    uint8_t black_y = 16;
+    uint8_t black_u = 128;
+    uint8_t black_v = 128;
+    uint8_t black_uv[2] = {128, 128};
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+
+    if (y_texture) {
+        glBindTexture(GL_TEXTURE_2D, y_texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, 1, 1, 0, GL_RED, GL_UNSIGNED_BYTE, &black_y);
+    }
+    if (u_texture) {
+        glBindTexture(GL_TEXTURE_2D, u_texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, 1, 1, 0, GL_RED, GL_UNSIGNED_BYTE, &black_u);
+    }
+    if (v_texture) {
+        glBindTexture(GL_TEXTURE_2D, v_texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, 1, 1, 0, GL_RED, GL_UNSIGNED_BYTE, &black_v);
+    }
+    if (uv_texture) {
+        glBindTexture(GL_TEXTURE_2D, uv_texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RG, 1, 1, 0, GL_RG, GL_UNSIGNED_BYTE, black_uv);
+    }
 }
 
 void ShaderRenderer::set_transform(float zoom, float pan_x, float pan_y) {
@@ -408,6 +468,7 @@ void ShaderRenderer::upload_yuv_frame(uint8_t* y_plane, uint8_t* u_plane, uint8_
     }
 
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    has_video_frame = true;
 }
 
 void ShaderRenderer::upload_nv12_frame(uint8_t* y_plane, uint8_t* uv_plane,
@@ -446,6 +507,7 @@ void ShaderRenderer::upload_nv12_frame(uint8_t* y_plane, uint8_t* uv_plane,
     }
 
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    has_video_frame = true;
 }
 
 void ShaderRenderer::upload_p010_frame(uint8_t* y_plane, uint8_t* uv_plane,
@@ -485,12 +547,13 @@ void ShaderRenderer::upload_p010_frame(uint8_t* y_plane, uint8_t* uv_plane,
     }
 
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    has_video_frame = true;
 }
 
 void ShaderRenderer::upload_yuv10_frame(uint8_t* y_plane, uint8_t* u_plane, uint8_t* v_plane,
                                         int y_stride, int u_stride, int v_stride,
                                         int width, int height) {
-    format_mode = 0; // 10-bit Planar YUV
+    format_mode = 3; // 10-bit Planar YUV (YUV420P10)
     current_width = width;
     current_height = height;
 
@@ -528,6 +591,7 @@ void ShaderRenderer::upload_yuv10_frame(uint8_t* y_plane, uint8_t* u_plane, uint
     }
 
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    has_video_frame = true;
 }
 
 void ShaderRenderer::upload_rgb_frame(uint8_t* rgb_data, int width, int height) {
@@ -550,6 +614,7 @@ void ShaderRenderer::upload_rgb_frame(uint8_t* rgb_data, int width, int height) 
     } else {
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, rgb_data);
     }
+    has_video_frame = true;
 }
 
 void ShaderRenderer::upload_thumbnail_frame(const uint8_t* rgb_data, int width, int height) {
@@ -574,17 +639,28 @@ void ShaderRenderer::upload_thumbnail_frame(const uint8_t* rgb_data, int width, 
     has_thumbnail_texture = true;
 }
 
-void ShaderRenderer::render(int window_width, int window_height) {
+void ShaderRenderer::render(int window_width, int window_height, bool menu_bar_visible) {
     glViewport(0, 0, window_width, window_height);
-    glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
+
+    if (!has_video_frame || current_width <= 0 || current_height <= 0) {
+        return;
+    }
+
+    float menu_h = menu_bar_visible ? 26.0f : 0.0f;
+    int video_viewport_h = std::max(1, window_height - static_cast<int>(menu_h));
+    glViewport(0, 0, window_width, video_viewport_h);
 
     glUseProgram(shader_program);
 
     float scale_x = 1.0f;
     float scale_y = 1.0f;
 
-    if (current_width > 0 && current_height > 0 && window_width > 0 && window_height > 0) {
+    float avail_w = static_cast<float>(window_width);
+    float avail_h = static_cast<float>(video_viewport_h);
+
+    if (current_width > 0 && current_height > 0 && avail_w > 0.0f && avail_h > 0.0f) {
         if (render_mode == RenderMode::FIT) {
             float target_aspect = static_cast<float>(current_width) / current_height;
             if (aspect_ratio_mode == AspectRatioMode::RATIO_16_9) {
@@ -596,10 +672,10 @@ void ShaderRenderer::render(int window_width, int window_height) {
             } else if (aspect_ratio_mode == AspectRatioMode::RATIO_1_1) {
                 target_aspect = 1.0f;
             } else if (aspect_ratio_mode == AspectRatioMode::RATIO_FILL) {
-                target_aspect = static_cast<float>(window_width) / window_height;
+                target_aspect = avail_w / avail_h;
             }
 
-            float window_aspect = static_cast<float>(window_width) / window_height;
+            float window_aspect = avail_w / avail_h;
             if (target_aspect > window_aspect) {
                 scale_x = 1.0f;
                 scale_y = window_aspect / target_aspect;
@@ -608,8 +684,8 @@ void ShaderRenderer::render(int window_width, int window_height) {
                 scale_y = 1.0f;
             }
         } else if (render_mode == RenderMode::PIXEL_PERFECT) {
-            scale_x = static_cast<float>(current_width) / window_width;
-            scale_y = static_cast<float>(current_height) / window_height;
+            scale_x = static_cast<float>(current_width) / avail_w;
+            scale_y = static_cast<float>(current_height) / avail_h;
         } else if (render_mode == RenderMode::STRETCH) {
             scale_x = 1.0f;
             scale_y = 1.0f;
@@ -632,8 +708,8 @@ void ShaderRenderer::render(int window_width, int window_height) {
     glBindTexture(GL_TEXTURE_2D, y_texture);
     glUniform1i(glGetUniformLocation(shader_program, "texY"), 0);
 
-    if (format_mode == 0) {
-        // YUV420P
+    if (format_mode == 0 || format_mode == 3) {
+        // YUV420P / YUV420P10 (Planar YUV)
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, u_texture);
         glUniform1i(glGetUniformLocation(shader_program, "texU"), 1);
@@ -642,7 +718,7 @@ void ShaderRenderer::render(int window_width, int window_height) {
         glBindTexture(GL_TEXTURE_2D, v_texture);
         glUniform1i(glGetUniformLocation(shader_program, "texV"), 2);
     } else if (format_mode == 1) {
-        // NV12
+        // NV12 / P010
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, uv_texture);
         glUniform1i(glGetUniformLocation(shader_program, "texUV"), 1);
@@ -650,6 +726,9 @@ void ShaderRenderer::render(int window_width, int window_height) {
 
     glBindVertexArray(vao);
     glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    // Restore full window viewport so UI elements (menu bar, OSD, subtitles) render cleanly across entire window
+    glViewport(0, 0, window_width, window_height);
 }
 
 void ShaderRenderer::draw_ui_rect(float x, float y, float w, float h, float r, float g, float b, float a, float ui_alpha, int win_w, int win_h) {
@@ -1198,31 +1277,33 @@ void ShaderRenderer::render_ui_overlay(int win_w, int win_h, double current_sec,
     GLuint fs_tex = is_fullscreen ? tex_icon_fullscreen_exit : tex_icon_fullscreen;
     draw_ui_icon(fs_tex, fs_x, fs_y, icon_size, icon_size, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
 
-    // 9. Top-Right "BACK" Button (to return to folder gallery)
-    float back_btn_w = 110.0f;
-    float back_btn_h = 32.0f;
-    float back_btn_x = win_w - back_btn_w - 20.0f;
-    float back_btn_y = is_fullscreen ? 16.0f : 36.0f;
+    // 9. Top-Right "BACK" Button & Stats (Render ONLY in windowed mode, 100% clean in fullscreen like VLC)
+    if (!is_fullscreen) {
+        float back_btn_w = 110.0f;
+        float back_btn_h = 32.0f;
+        float back_btn_x = win_w - back_btn_w - 20.0f;
+        float back_btn_y = 36.0f;
 
-    bool back_hover = (mouse_x >= back_btn_x && mouse_x <= back_btn_x + back_btn_w &&
-                      mouse_y >= back_btn_y && mouse_y <= back_btn_y + back_btn_h);
+        bool back_hover = (mouse_x >= back_btn_x && mouse_x <= back_btn_x + back_btn_w &&
+                          mouse_y >= back_btn_y && mouse_y <= back_btn_y + back_btn_h);
 
-    if (back_hover) {
-        draw_ui_rounded_rect(back_btn_x, back_btn_y, back_btn_w, back_btn_h, 16.0f, 0.0f, 0.85f, 1.0f, 0.90f, ui_alpha, win_w, win_h);
-        draw_ui_string("< BACK", back_btn_x + 22.0f, back_btn_y + 8.0f, 10.0f, 14.0f, 0.02f, 0.05f, 0.10f, 1.0f, ui_alpha, win_w, win_h);
-    } else {
-        draw_ui_rounded_rect(back_btn_x, back_btn_y, back_btn_w, back_btn_h, 16.0f, 0.0f, 0.40f, 0.70f, 0.45f, ui_alpha, win_w, win_h);
-        draw_ui_string("< BACK", back_btn_x + 22.0f, back_btn_y + 8.0f, 10.0f, 14.0f, 1.0f, 1.0f, 1.0f, 0.95f, ui_alpha, win_w, win_h);
-    }
+        if (back_hover) {
+            draw_ui_rounded_rect(back_btn_x, back_btn_y, back_btn_w, back_btn_h, 16.0f, 0.0f, 0.85f, 1.0f, 0.90f, ui_alpha, win_w, win_h);
+            draw_ui_string("< BACK", back_btn_x + 22.0f, back_btn_y + 8.0f, 10.0f, 14.0f, 0.02f, 0.05f, 0.10f, 1.0f, ui_alpha, win_w, win_h);
+        } else {
+            draw_ui_rounded_rect(back_btn_x, back_btn_y, back_btn_w, back_btn_h, 16.0f, 0.0f, 0.40f, 0.70f, 0.45f, ui_alpha, win_w, win_h);
+            draw_ui_string("< BACK", back_btn_x + 22.0f, back_btn_y + 8.0f, 10.0f, 14.0f, 1.0f, 1.0f, 1.0f, 0.95f, ui_alpha, win_w, win_h);
+        }
 
-    // 10. Statistics Icon (Top Right, to the left of BACK button)
-    float stats_x = back_btn_x - 38.0f;
-    float stats_y = back_btn_y + 5.0f;
+        // 10. Statistics Icon (Top Right, to the left of BACK button)
+        float stats_x = back_btn_x - 38.0f;
+        float stats_y = back_btn_y + 5.0f;
 
-    if (show_stats) {
-        draw_ui_icon(tex_icon_stats, stats_x, stats_y, icon_size, icon_size, 0.0f, 0.85f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
-    } else {
-        draw_ui_icon(tex_icon_stats, stats_x, stats_y, icon_size, icon_size, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
+        if (show_stats) {
+            draw_ui_icon(tex_icon_stats, stats_x, stats_y, icon_size, icon_size, 0.0f, 0.85f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
+        } else {
+            draw_ui_icon(tex_icon_stats, stats_x, stats_y, icon_size, icon_size, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
+        }
     }
 
     // 10. Center Screen Pause Badge Overlay
@@ -1238,7 +1319,7 @@ void ShaderRenderer::render_ui_overlay(int win_w, int win_h, double current_sec,
         float pop_w = 420.0f;
         float pop_h = 240.0f;
         float pop_x = std::max(20.0f, win_w - pop_w - 20.0f);
-        float pop_y = stats_y + icon_size + 10.0f;
+        float pop_y = is_fullscreen ? 20.0f : (36.0f + 5.0f + icon_size + 10.0f);
 
         // Uniform 1px subtle glass/cyan border around the entire rounded card
         draw_ui_rounded_rect(pop_x, pop_y, pop_w, pop_h, 8.0f, 0.0f, 0.85f, 1.0f, 0.30f, ui_alpha, win_w, win_h);
@@ -1340,35 +1421,27 @@ void ShaderRenderer::render_welcome_screen(int win_w, int win_h, double mouse_x,
     float card_x = (static_cast<float>(win_w) - card_w) / 2.0f;
     float card_y = (static_cast<float>(win_h) - card_h) / 2.0f;
 
-    bool card_hover = (mouse_x >= card_x && mouse_x <= card_x + card_w &&
-                       mouse_y >= card_y && mouse_y <= card_y + card_h);
+    // Main Card background (clean VLC dark card with 1px border, NO hover halo)
+    draw_ui_rounded_rect(card_x - 1.0f, card_y - 1.0f, card_w + 2.0f, card_h + 2.0f, 
+                         17.0f * scale, 0.18f, 0.20f, 0.24f, 0.95f, 1.0f, win_w, win_h);
+    draw_ui_rounded_rect(card_x, card_y, card_w, card_h, 
+                         16.0f * scale, 0.08f, 0.09f, 0.12f, 0.98f, 1.0f, win_w, win_h);
 
-    // Outer subtle cyan glow / halo
-    float glow_expand = card_hover ? (6.0f * scale) : (2.0f * scale);
-    float glow_alpha = card_hover ? 0.35f : 0.15f;
-    draw_ui_rounded_rect(card_x - glow_expand, card_y - glow_expand, 
-                         card_w + glow_expand * 2.0f, card_h + glow_expand * 2.0f, 
-                         20.0f * scale, 0.0f, 0.85f, 1.0f, glow_alpha, 1.0f, win_w, win_h);
-
-    // Main Card background (dark translucent glassmorphic panel)
-    draw_ui_rounded_rect(card_x, card_y, card_w, card_h, 16.0f * scale, 0.06f, 0.08f, 0.14f, 0.95f, 1.0f, win_w, win_h);
-
-    // Inner dashed/soft border
-    float border_alpha = card_hover ? 0.80f : 0.40f;
+    // Inner subtle border
     draw_ui_rounded_rect(card_x + 8.0f * scale, card_y + 8.0f * scale, 
                          card_w - 16.0f * scale, card_h - 16.0f * scale, 
-                         12.0f * scale, 0.0f, 0.85f, 1.0f, border_alpha * 0.25f, 1.0f, win_w, win_h);
+                         12.0f * scale, 0.16f, 0.20f, 0.26f, 0.35f, 1.0f, win_w, win_h);
 
-    // Central Icon (Glowing Play / Media Emblem)
+    // Central Icon (clean media emblem, no glowing halo)
     float icon_sz = 64.0f * scale;
     float icon_cx = card_x + (card_w - icon_sz) / 2.0f;
     float icon_cy = card_y + (35.0f * scale);
 
-    draw_ui_circle(icon_cx + icon_sz / 2.0f, icon_cy + icon_sz / 2.0f, 44.0f * scale, 0.0f, 0.85f, 1.0f, card_hover ? 0.25f : 0.12f, 1.0f, win_w, win_h);
-    draw_ui_icon(tex_icon_play, icon_cx, icon_cy, icon_sz, icon_sz, 0.0f, 0.90f, 1.0f, 1.0f, 1.0f, win_w, win_h);
+    draw_ui_circle(icon_cx + icon_sz / 2.0f, icon_cy + icon_sz / 2.0f, 40.0f * scale, 0.12f, 0.14f, 0.18f, 0.90f, 1.0f, win_w, win_h);
+    draw_ui_icon(tex_icon_play, icon_cx, icon_cy, icon_sz, icon_sz, 0.0f, 0.70f, 0.95f, 0.90f, 1.0f, win_w, win_h);
 
     // Main Title
-    std::string title_str = "VMP - VIDEO MEDIA PLAYER";
+    std::string title_str = "VMP - VIDEO MAX PLAYER";
     float title_font_sz = 22.0f * scale;
     float title_w = get_text_width(title_str, title_font_sz);
     float title_x = card_x + (card_w - title_w) / 2.0f;
@@ -1406,14 +1479,11 @@ void ShaderRenderer::render_welcome_screen(int win_w, int win_h, double mouse_x,
     float txt_x = btn_x + (btn_w - txt_w) / 2.0f;
 
     if (btn_hover) {
-        draw_ui_rounded_rect(btn_x - (2.0f * scale), btn_y - (2.0f * scale), 
-                             btn_w + (4.0f * scale), btn_h + (4.0f * scale), 
-                             (btn_h + (4.0f * scale)) / 2.0f, 0.0f, 0.95f, 1.0f, 0.40f, 1.0f, win_w, win_h);
-        draw_ui_rounded_rect(btn_x, btn_y, btn_w, btn_h, btn_h / 2.0f, 0.0f, 0.75f, 0.95f, 0.90f, 1.0f, win_w, win_h);
-        draw_ui_text(btn_txt, txt_x, btn_y + (10.0f * scale), txt_font_sz, 0.02f, 0.05f, 0.10f, 1.0f, 1.0f, win_w, win_h);
+        draw_ui_rounded_rect(btn_x, btn_y, btn_w, btn_h, btn_h / 2.0f, 0.0f, 0.50f, 0.85f, 0.90f, 1.0f, win_w, win_h);
+        draw_ui_text(btn_txt, txt_x, btn_y + (10.0f * scale), txt_font_sz, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
     } else {
-        draw_ui_rounded_rect(btn_x, btn_y, btn_w, btn_h, btn_h / 2.0f, 0.0f, 0.40f, 0.70f, 0.45f, 1.0f, win_w, win_h);
-        draw_ui_text(btn_txt, txt_x, btn_y + (10.0f * scale), txt_font_sz, 1.0f, 1.0f, 1.0f, 0.95f, 1.0f, win_w, win_h);
+        draw_ui_rounded_rect(btn_x, btn_y, btn_w, btn_h, btn_h / 2.0f, 0.16f, 0.20f, 0.28f, 0.85f, 1.0f, win_w, win_h);
+        draw_ui_text(btn_txt, txt_x, btn_y + (10.0f * scale), txt_font_sz, 0.90f, 0.92f, 0.95f, 0.95f, 1.0f, win_w, win_h);
     }
 }
 
@@ -1636,133 +1706,100 @@ void ShaderRenderer::init_vlc_menus() {
     VlcMenuCategory help;
     help.title = "Help";
     help.items = {
-        {"About VMP (Video Media Player)", "", VlcMenuAction::HELP_ABOUT}
+        {"About VMP (Video Max Player)", "", VlcMenuAction::HELP_ABOUT}
     };
 
     vlc_menus = { media, playback, audio, video, subtitle, tools, view, help };
 }
 
 void ShaderRenderer::render_vlc_menu_bar(int win_w, int win_h, double mouse_x, double mouse_y,
-                                         int active_menu_idx, float menu_alpha, const std::string& title) {
+                                         int active_menu_idx, float menu_alpha) {
+    (void)mouse_x;
+    (void)mouse_y;
     if (win_w <= 0 || win_h <= 0 || menu_alpha <= 0.01f) return;
     init_vlc_menus();
 
-    float menu_h = 28.0f;
-    float font_sz = 13.0f;
+    float menu_h = 26.0f;
+    float font_sz = 12.5f;
 
-    // Background bar spanning full window width
-    draw_ui_rect(0, 0, static_cast<float>(win_w), menu_h, 0.08f, 0.09f, 0.13f, 0.98f, menu_alpha, win_w, win_h);
-    // Subtle bottom border line
-    draw_ui_rect(0, menu_h - 1.0f, static_cast<float>(win_w), 1.0f, 0.20f, 0.23f, 0.32f, 0.85f, menu_alpha, win_w, win_h);
+    // VLC Menu Bar dark background (#21232a)
+    draw_ui_rect(0, 0, static_cast<float>(win_w), menu_h, 0.13f, 0.14f, 0.17f, 1.0f, menu_alpha, win_w, win_h);
+    // Subtle 1px bottom border line (#18191f)
+    draw_ui_rect(0, menu_h - 1.0f, static_cast<float>(win_w), 1.0f, 0.09f, 0.10f, 0.12f, 1.0f, menu_alpha, win_w, win_h);
 
-    // App mini icon on far left
-    if (tex_icon_play != 0) {
-        float icon_sz = 14.0f;
-        draw_ui_icon(tex_icon_play, 10.0f, (menu_h - icon_sz) / 2.0f, icon_sz, icon_sz, 0.0f, 0.85f, 1.0f, 0.95f, menu_alpha, win_w, win_h);
-    }
-
-    float cur_x = 30.0f;
+    float cur_x = 8.0f;
     for (size_t i = 0; i < vlc_menus.size(); ++i) {
         auto& cat = vlc_menus[i];
         float text_w = get_text_width(cat.title, font_sz);
         cat.x = cur_x;
-        cat.width = text_w + 18.0f;
+        cat.width = text_w + 14.0f;
 
-        bool is_hovered = (mouse_x >= cat.x && mouse_x < cat.x + cat.width &&
-                           mouse_y >= 0.0 && mouse_y <= menu_h);
         bool is_active = (static_cast<int>(i) == active_menu_idx);
 
         if (is_active) {
-            // Active highlighted pill/button
-            draw_ui_rounded_rect(cat.x, 3.0f, cat.width, menu_h - 6.0f, 4.0f, 
-                                 0.0f, 0.70f, 0.95f, 0.35f, menu_alpha, win_w, win_h);
-            draw_ui_text(cat.title, cat.x + 9.0f, 5.0f, font_sz, 
-                         1.0f, 1.0f, 1.0f, 1.0f, menu_alpha, win_w, win_h);
-        } else if (is_hovered) {
-            // Hover highlight
-            draw_ui_rounded_rect(cat.x, 3.0f, cat.width, menu_h - 6.0f, 4.0f, 
-                                 1.0f, 1.0f, 1.0f, 0.15f, menu_alpha, win_w, win_h);
-            draw_ui_text(cat.title, cat.x + 9.0f, 5.0f, font_sz, 
+            // VLC active menu item highlight (when clicked / open)
+            draw_ui_rounded_rect(cat.x, 2.0f, cat.width, menu_h - 4.0f, 3.0f, 
+                                 0.0f, 0.45f, 0.85f, 0.50f, menu_alpha, win_w, win_h);
+            draw_ui_text(cat.title, cat.x + 7.0f, 4.5f, font_sz, 
                          1.0f, 1.0f, 1.0f, 1.0f, menu_alpha, win_w, win_h);
         } else {
-            // Normal state
-            draw_ui_text(cat.title, cat.x + 9.0f, 5.0f, font_sz, 
-                         0.85f, 0.88f, 0.92f, 0.90f, menu_alpha, win_w, win_h);
+            // Normal state: No halo or box on hover, purely clean like VLC
+            draw_ui_text(cat.title, cat.x + 7.0f, 4.5f, font_sz, 
+                         0.90f, 0.92f, 0.94f, 0.95f, menu_alpha, win_w, win_h);
         }
 
-        cur_x += cat.width + 4.0f;
-    }
-
-    // Integrated Window / Media Title on the right side of the bar
-    std::string display_title = title.empty() ? "VMP Video Player" : ("VMP Video Player — " + title);
-    float title_font_sz = 12.0f;
-    float title_w = get_text_width(display_title, title_font_sz);
-
-    // If display_title is too long, truncate gracefully with ellipsis
-    if (title_w > (static_cast<float>(win_w) - cur_x - 50.0f) && !title.empty()) {
-        display_title = title;
-        title_w = get_text_width(display_title, title_font_sz);
-        if (title_w > (static_cast<float>(win_w) - cur_x - 50.0f)) {
-            while (display_title.length() > 8 && get_text_width(display_title + "...", title_font_sz) > (static_cast<float>(win_w) - cur_x - 50.0f)) {
-                display_title.pop_back();
-            }
-            display_title += "...";
-            title_w = get_text_width(display_title, title_font_sz);
-        }
-    }
-
-    if (static_cast<float>(win_w) - title_w - 20.0f > cur_x + 20.0f) {
-        // Vertical subtle divider
-        draw_ui_rect(cur_x + 8.0f, 6.0f, 1.0f, menu_h - 12.0f, 0.25f, 0.28f, 0.38f, 0.70f, menu_alpha, win_w, win_h);
-        float title_x = static_cast<float>(win_w) - title_w - 18.0f;
-        draw_ui_text(display_title, title_x, 6.0f, title_font_sz, 0.60f, 0.72f, 0.85f, 0.85f, menu_alpha, win_w, win_h);
+        cur_x += cat.width + 2.0f;
     }
 }
 
-void ShaderRenderer::render_vlc_dropdown(int win_w, int win_h, double mouse_x, double mouse_y, int menu_idx) {
+void ShaderRenderer::render_vlc_dropdown(int win_w, int win_h, double mouse_x, double mouse_y, 
+                                         int menu_idx, float custom_x, float custom_y) {
     if (win_w <= 0 || win_h <= 0 || menu_idx < 0 || menu_idx >= static_cast<int>(vlc_menus.size())) return;
 
     const auto& cat = vlc_menus[menu_idx];
     if (cat.items.empty()) return;
 
-    float menu_h = 28.0f;
+    float menu_h = 26.0f;
     float card_w = 260.0f;
-    float item_h = 28.0f;
-    float card_h = static_cast<float>(cat.items.size()) * item_h + 10.0f;
+    float item_h = 26.0f;
+    float card_h = static_cast<float>(cat.items.size()) * item_h + 8.0f;
 
-    float drop_x = std::max(4.0f, std::min(cat.x, static_cast<float>(win_w) - card_w - 10.0f));
-    float drop_y = menu_h;
+    float drop_x = (custom_x >= 0.0f) ? custom_x : std::max(4.0f, std::min(cat.x, static_cast<float>(win_w) - card_w - 10.0f));
+    float drop_y = (custom_y >= 0.0f) ? custom_y : menu_h;
+    if (drop_y + card_h > static_cast<float>(win_h) - 10.0f) {
+        drop_y = std::max(0.0f, static_cast<float>(win_h) - card_h - 10.0f);
+    }
 
-    // Dropdown Outer Subtle Cyan / Glass border
-    draw_ui_rounded_rect(drop_x - 1.0f, drop_y, card_w + 2.0f, card_h + 2.0f, 6.0f, 
-                         0.0f, 0.85f, 1.0f, 0.35f, 1.0f, win_w, win_h);
+    // Dropdown Outer Border (VLC dark gray border)
+    draw_ui_rounded_rect(drop_x - 1.0f, drop_y - 1.0f, card_w + 2.0f, card_h + 2.0f, 4.0f, 
+                         0.23f, 0.25f, 0.30f, 0.95f, 1.0f, win_w, win_h);
 
-    // Dropdown Background Panel (Sleek dark card)
-    draw_ui_rounded_rect(drop_x, drop_y + 1.0f, card_w, card_h, 5.0f, 
-                         0.07f, 0.09f, 0.14f, 0.98f, 1.0f, win_w, win_h);
+    // Dropdown Background Panel (VLC dark card #20232b)
+    draw_ui_rounded_rect(drop_x, drop_y, card_w, card_h, 3.0f, 
+                         0.125f, 0.135f, 0.17f, 0.98f, 1.0f, win_w, win_h);
 
     for (size_t i = 0; i < cat.items.size(); ++i) {
         const auto& item = cat.items[i];
-        float it_y = drop_y + 5.0f + static_cast<float>(i) * item_h;
+        float it_y = drop_y + 4.0f + static_cast<float>(i) * item_h;
 
-        bool it_hover = (mouse_x >= drop_x + 4.0f && mouse_x <= drop_x + card_w - 4.0f &&
+        bool it_hover = (mouse_x >= drop_x + 2.0f && mouse_x <= drop_x + card_w - 2.0f &&
                          mouse_y >= it_y && mouse_y < it_y + item_h);
 
         if (it_hover) {
-            draw_ui_rounded_rect(drop_x + 4.0f, it_y, card_w - 8.0f, item_h, 4.0f, 
-                                 0.0f, 0.70f, 0.95f, 0.30f, 1.0f, win_w, win_h);
-            draw_ui_text(item.label, drop_x + 14.0f, it_y + 6.0f, 12.5f, 
+            draw_ui_rounded_rect(drop_x + 2.0f, it_y, card_w - 4.0f, item_h, 3.0f, 
+                                 0.0f, 0.42f, 0.80f, 0.75f, 1.0f, win_w, win_h);
+            draw_ui_text(item.label, drop_x + 12.0f, it_y + 5.0f, 12.0f, 
                          1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
         } else {
-            draw_ui_text(item.label, drop_x + 14.0f, it_y + 6.0f, 12.5f, 
-                         0.90f, 0.92f, 0.95f, 0.92f, 1.0f, win_w, win_h);
+            draw_ui_text(item.label, drop_x + 12.0f, it_y + 5.0f, 12.0f, 
+                         0.90f, 0.92f, 0.95f, 0.95f, 1.0f, win_w, win_h);
         }
 
         if (!item.shortcut.empty()) {
-            float sc_w = get_text_width(item.shortcut, 11.5f);
-            float sc_x = drop_x + card_w - sc_w - 14.0f;
-            draw_ui_text(item.shortcut, sc_x, it_y + 7.0f, 11.5f, 
-                         0.55f, 0.65f, 0.75f, 0.85f, 1.0f, win_w, win_h);
+            float sc_w = get_text_width(item.shortcut, 11.0f);
+            float sc_x = drop_x + card_w - sc_w - 12.0f;
+            draw_ui_text(item.shortcut, sc_x, it_y + 6.0f, 11.0f, 
+                         0.55f, 0.62f, 0.72f, 0.85f, 1.0f, win_w, win_h);
         }
     }
 }
@@ -1770,7 +1807,7 @@ void ShaderRenderer::render_vlc_dropdown(int win_w, int win_h, double mouse_x, d
 int ShaderRenderer::hit_test_vlc_menu_bar(int win_w, int win_h, double mouse_x, double mouse_y) {
     if (win_w <= 0 || win_h <= 0) return -1;
     init_vlc_menus();
-    float menu_h = 28.0f;
+    float menu_h = 26.0f;
     if (mouse_y < 0.0 || mouse_y > menu_h) return -1;
 
     for (size_t i = 0; i < vlc_menus.size(); ++i) {
@@ -1781,7 +1818,8 @@ int ShaderRenderer::hit_test_vlc_menu_bar(int win_w, int win_h, double mouse_x, 
     return -1;
 }
 
-VlcMenuAction ShaderRenderer::hit_test_vlc_dropdown(int win_w, int win_h, double mouse_x, double mouse_y, int menu_idx) {
+VlcMenuAction ShaderRenderer::hit_test_vlc_dropdown(int win_w, int win_h, double mouse_x, double mouse_y, 
+                                                    int menu_idx, float custom_x, float custom_y) {
     if (win_w <= 0 || win_h <= 0 || menu_idx < 0 || menu_idx >= static_cast<int>(vlc_menus.size())) {
         return VlcMenuAction::NONE;
     }
@@ -1789,13 +1827,16 @@ VlcMenuAction ShaderRenderer::hit_test_vlc_dropdown(int win_w, int win_h, double
     const auto& cat = vlc_menus[menu_idx];
     if (cat.items.empty()) return VlcMenuAction::NONE;
 
-    float menu_h = 28.0f;
+    float menu_h = 26.0f;
     float card_w = 260.0f;
-    float item_h = 28.0f;
-    float card_h = static_cast<float>(cat.items.size()) * item_h + 10.0f;
+    float item_h = 26.0f;
+    float card_h = static_cast<float>(cat.items.size()) * item_h + 8.0f;
 
-    float drop_x = std::max(4.0f, std::min(cat.x, static_cast<float>(win_w) - card_w - 10.0f));
-    float drop_y = menu_h;
+    float drop_x = (custom_x >= 0.0f) ? custom_x : std::max(4.0f, std::min(cat.x, static_cast<float>(win_w) - card_w - 10.0f));
+    float drop_y = (custom_y >= 0.0f) ? custom_y : menu_h;
+    if (drop_y + card_h > static_cast<float>(win_h) - 10.0f) {
+        drop_y = std::max(0.0f, static_cast<float>(win_h) - card_h - 10.0f);
+    }
 
     if (mouse_x < drop_x || mouse_x > drop_x + card_w ||
         mouse_y < drop_y || mouse_y > drop_y + card_h) {
@@ -1803,7 +1844,7 @@ VlcMenuAction ShaderRenderer::hit_test_vlc_dropdown(int win_w, int win_h, double
     }
 
     for (size_t i = 0; i < cat.items.size(); ++i) {
-        float it_y = drop_y + 5.0f + static_cast<float>(i) * item_h;
+        float it_y = drop_y + 4.0f + static_cast<float>(i) * item_h;
         if (mouse_y >= it_y && mouse_y < it_y + item_h) {
             return cat.items[i].action;
         }
@@ -1812,15 +1853,126 @@ VlcMenuAction ShaderRenderer::hit_test_vlc_dropdown(int win_w, int win_h, double
     return VlcMenuAction::NONE;
 }
 
-bool ShaderRenderer::is_mouse_inside_dropdown(int win_w, int win_h, double mouse_x, double mouse_y, int menu_idx) {
+bool ShaderRenderer::is_mouse_inside_dropdown(int win_w, int win_h, double mouse_x, double mouse_y, 
+                                              int menu_idx, float custom_x, float custom_y) {
     if (win_w <= 0 || win_h <= 0 || menu_idx < 0 || menu_idx >= static_cast<int>(vlc_menus.size())) return false;
     const auto& cat = vlc_menus[menu_idx];
-    float menu_h = 28.0f;
+    float menu_h = 26.0f;
     float card_w = 260.0f;
-    float item_h = 28.0f;
-    float card_h = static_cast<float>(cat.items.size()) * item_h + 10.0f;
-    float drop_x = std::max(4.0f, std::min(cat.x, static_cast<float>(win_w) - card_w - 10.0f));
-    float drop_y = menu_h;
+    float item_h = 26.0f;
+    float card_h = static_cast<float>(cat.items.size()) * item_h + 8.0f;
+    float drop_x = (custom_x >= 0.0f) ? custom_x : std::max(4.0f, std::min(cat.x, static_cast<float>(win_w) - card_w - 10.0f));
+    float drop_y = (custom_y >= 0.0f) ? custom_y : menu_h;
+    if (drop_y + card_h > static_cast<float>(win_h) - 10.0f) {
+        drop_y = std::max(0.0f, static_cast<float>(win_h) - card_h - 10.0f);
+    }
     return (mouse_x >= drop_x && mouse_x <= drop_x + card_w &&
             mouse_y >= drop_y && mouse_y <= drop_y + card_h);
+}
+
+void ShaderRenderer::render_vlc_context_menu(int win_w, int win_h, double mouse_x, double mouse_y,
+                                             float ctx_x, float ctx_y, int active_submenu_idx) {
+    if (win_w <= 0 || win_h <= 0) return;
+    init_vlc_menus();
+
+    float card_w = 170.0f;
+    float item_h = 26.0f;
+    float card_h = static_cast<float>(vlc_menus.size()) * item_h + 8.0f;
+
+    float root_x = std::max(4.0f, std::min(ctx_x, static_cast<float>(win_w) - card_w - 10.0f));
+    float root_y = std::max(4.0f, std::min(ctx_y, static_cast<float>(win_h) - card_h - 10.0f));
+
+    // Outer border
+    draw_ui_rounded_rect(root_x - 1.0f, root_y - 1.0f, card_w + 2.0f, card_h + 2.0f, 4.0f,
+                         0.23f, 0.25f, 0.30f, 0.95f, 1.0f, win_w, win_h);
+    // Background
+    draw_ui_rounded_rect(root_x, root_y, card_w, card_h, 3.0f,
+                         0.125f, 0.135f, 0.17f, 0.98f, 1.0f, win_w, win_h);
+
+    for (size_t i = 0; i < vlc_menus.size(); ++i) {
+        float it_y = root_y + 4.0f + static_cast<float>(i) * item_h;
+        bool it_hover = (mouse_x >= root_x + 2.0f && mouse_x <= root_x + card_w - 2.0f &&
+                         mouse_y >= it_y && mouse_y < it_y + item_h);
+        bool is_sub_active = (static_cast<int>(i) == active_submenu_idx);
+
+        if (it_hover || is_sub_active) {
+            draw_ui_rounded_rect(root_x + 2.0f, it_y, card_w - 4.0f, item_h, 3.0f,
+                                 0.0f, 0.42f, 0.80f, 0.75f, 1.0f, win_w, win_h);
+            draw_ui_text(vlc_menus[i].title, root_x + 12.0f, it_y + 5.0f, 12.0f,
+                         1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
+            draw_ui_text(">", root_x + card_w - 16.0f, it_y + 5.0f, 12.0f,
+                         1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
+        } else {
+            draw_ui_text(vlc_menus[i].title, root_x + 12.0f, it_y + 5.0f, 12.0f,
+                         0.90f, 0.92f, 0.95f, 0.95f, 1.0f, win_w, win_h);
+            draw_ui_text(">", root_x + card_w - 16.0f, it_y + 5.0f, 12.0f,
+                         0.55f, 0.62f, 0.72f, 0.85f, 1.0f, win_w, win_h);
+        }
+    }
+
+    // Render active submenu if open
+    if (active_submenu_idx >= 0 && active_submenu_idx < static_cast<int>(vlc_menus.size())) {
+        float sub_x = root_x + card_w + 2.0f;
+        if (sub_x + 260.0f > static_cast<float>(win_w)) {
+            sub_x = root_x - 262.0f;
+        }
+        float sub_y = root_y + 4.0f + static_cast<float>(active_submenu_idx) * item_h;
+        render_vlc_dropdown(win_w, win_h, mouse_x, mouse_y, active_submenu_idx, sub_x, sub_y);
+    }
+}
+
+int ShaderRenderer::hit_test_vlc_context_menu_category(int win_w, int win_h, double mouse_x, double mouse_y,
+                                                       float ctx_x, float ctx_y) {
+    if (win_w <= 0 || win_h <= 0) return -1;
+    init_vlc_menus();
+
+    float card_w = 170.0f;
+    float item_h = 26.0f;
+    float card_h = static_cast<float>(vlc_menus.size()) * item_h + 8.0f;
+
+    float root_x = std::max(4.0f, std::min(ctx_x, static_cast<float>(win_w) - card_w - 10.0f));
+    float root_y = std::max(4.0f, std::min(ctx_y, static_cast<float>(win_h) - card_h - 10.0f));
+
+    if (mouse_x < root_x || mouse_x > root_x + card_w ||
+        mouse_y < root_y || mouse_y > root_y + card_h) {
+        return -1;
+    }
+
+    for (size_t i = 0; i < vlc_menus.size(); ++i) {
+        float it_y = root_y + 4.0f + static_cast<float>(i) * item_h;
+        if (mouse_y >= it_y && mouse_y < it_y + item_h) {
+            return static_cast<int>(i);
+        }
+    }
+
+    return -1;
+}
+
+bool ShaderRenderer::is_mouse_inside_context_menu(int win_w, int win_h, double mouse_x, double mouse_y,
+                                                  float ctx_x, float ctx_y, int active_submenu_idx) {
+    if (win_w <= 0 || win_h <= 0) return false;
+    init_vlc_menus();
+
+    float card_w = 170.0f;
+    float item_h = 26.0f;
+    float card_h = static_cast<float>(vlc_menus.size()) * item_h + 8.0f;
+
+    float root_x = std::max(4.0f, std::min(ctx_x, static_cast<float>(win_w) - card_w - 10.0f));
+    float root_y = std::max(4.0f, std::min(ctx_y, static_cast<float>(win_h) - card_h - 10.0f));
+
+    if (mouse_x >= root_x && mouse_x <= root_x + card_w &&
+        mouse_y >= root_y && mouse_y <= root_y + card_h) {
+        return true;
+    }
+
+    if (active_submenu_idx >= 0 && active_submenu_idx < static_cast<int>(vlc_menus.size())) {
+        float sub_x = root_x + card_w + 2.0f;
+        if (sub_x + 260.0f > static_cast<float>(win_w)) {
+            sub_x = root_x - 262.0f;
+        }
+        float sub_y = root_y + 4.0f + static_cast<float>(active_submenu_idx) * item_h;
+        return is_mouse_inside_dropdown(win_w, win_h, mouse_x, mouse_y, active_submenu_idx, sub_x, sub_y);
+    }
+
+    return false;
 }

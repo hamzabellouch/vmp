@@ -21,6 +21,9 @@ vmp
 vmp_engine
 vmp_desktop
 vmp_cli
+oculus_engine
+oculus_desktop
+oculus_cli
 
 # CMake generated files
 CMakeCache.txt
@@ -69,6 +72,7 @@ __pycache__/
 report.json
 telemetry.json
 .vmp_resume.json
+.oculus_resume.json
 *.bmp
 
 # Media files (do not commit test video/audio samples to repo)

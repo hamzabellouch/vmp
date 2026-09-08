@@ -190,7 +190,7 @@ def generate_all(icons_dir=None):
     # Write src/material_icons_data.h
     header_path = os.path.join(BASE_DIR, 'src/material_icons_data.h')
     with open(header_path, 'w') as f:
-        f.write("#ifndef VMP_MATERIAL_ICONS_DATA_H\n#define VMP_MATERIAL_ICONS_DATA_H\n\n")
+        f.write("#ifndef OCULUS_MATERIAL_ICONS_DATA_H\n#define OCULUS_MATERIAL_ICONS_DATA_H\n\n")
         f.write("#include <cstdint>\n\n")
         f.write("constexpr int ICON_SIZE = 128;\n\n")
         
@@ -203,14 +203,14 @@ def generate_all(icons_dir=None):
             f.write(",\n".join(lines))
             f.write("\n};\n\n")
             
-        f.write("#endif // VMP_MATERIAL_ICONS_DATA_H\n")
+        f.write("#endif // OCULUS_MATERIAL_ICONS_DATA_H\n")
     print(f"Generated C++ Header: {header_path}")
     print(f"Generated C++ Header: {header_path}")
     
     # Write src/seek_icons_data.h
     seek_header_path = os.path.join(BASE_DIR, 'src/seek_icons_data.h')
     with open(seek_header_path, 'w') as f:
-        f.write("#ifndef VMP_SEEK_ICONS_DATA_H\n#define VMP_SEEK_ICONS_DATA_H\n\n")
+        f.write("#ifndef OCULUS_SEEK_ICONS_DATA_H\n#define OCULUS_SEEK_ICONS_DATA_H\n\n")
         f.write("#include <cstdint>\n\n")
         for name in ['replay5', 'forward5']:
             _, data, _ = generated_icons[name]
@@ -219,7 +219,7 @@ def generate_all(icons_dir=None):
             lines = [", ".join(hex_items[i:i+16]) for i in range(0, len(hex_items), 16)]
             f.write(",\n".join(lines))
             f.write("\n};\n\n")
-        f.write("#endif // VMP_SEEK_ICONS_DATA_H\n")
+        f.write("#endif // OCULUS_SEEK_ICONS_DATA_H\n")
     print(f"Generated C++ Header: {seek_header_path}")
     print("Done generating all icon assets and headers!")
 

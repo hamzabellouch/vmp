@@ -133,21 +133,47 @@ bool VideoPlayer::open_file(const std::string& filepath) {
         video_codec_ctx->thread_count = 0;
         video_codec_ctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
 
-        // Try HW Acceleration
+        // Determine acceleration mode
+        const char* force_cpu_env = std::getenv("VMP_FORCE_CPU");
+        const char* hw_accel_env = std::getenv("VMP_HW_ACCEL");
+        if (force_cpu_env && std::string(force_cpu_env) == "1") {
+            hw_accel_mode = HWAccelMode::FORCE_CPU;
+        } else if (hw_accel_env) {
+            std::string env_str = hw_accel_env;
+            if (env_str == "cpu" || env_str == "none" || env_str == "0" || env_str == "off") {
+                hw_accel_mode = HWAccelMode::FORCE_CPU;
+            } else if (env_str == "vaapi" || env_str == "cuda" || env_str == "force" || env_str == "hw") {
+                hw_accel_mode = HWAccelMode::FORCE_HW;
+            }
+        }
+
+        // Auto Heuristic: On Linux with VA-API copy-back, 4K+ (width >= 3840 || height >= 2160) VP9 / AV1
+        // surface transfers (vaGetImage) are bandwidth-capped at ~30 FPS due to uncached bus memory readback.
+        // Multi-threaded AVX2 CPU decoding delivers 100+ FPS at 4K. Prefer CPU engine for 4K+ VP9/AV1.
+        bool is_4k_vp9_av1 = (video_codec_ctx->width >= 3840 || video_codec_ctx->height >= 2160) &&
+                             (v_decoder->id == AV_CODEC_ID_VP9 || v_decoder->id == AV_CODEC_ID_AV1);
+
+        bool try_hw = (hw_accel_mode == HWAccelMode::FORCE_HW) ||
+                      (hw_accel_mode == HWAccelMode::AUTO && !is_4k_vp9_av1);
+
         bool hw_success = false;
-        auto hw_devices = hw_decoder.get_supported_hw_devices();
-        for (const auto& dev_name : hw_devices) {
-            enum AVHWDeviceType type = av_hwdevice_find_type_by_name(dev_name.c_str());
-            if (type != AV_HWDEVICE_TYPE_NONE) {
-                if (hw_decoder.init_hardware_context(video_codec_ctx, type)) {
-                    stats.hw_acceleration_status = "ENABLED (" + dev_name + ")";
-                    hw_success = true;
-                    break;
+        if (try_hw) {
+            auto hw_devices = hw_decoder.get_supported_hw_devices();
+            for (const auto& dev_name : hw_devices) {
+                enum AVHWDeviceType type = av_hwdevice_find_type_by_name(dev_name.c_str());
+                if (type != AV_HWDEVICE_TYPE_NONE) {
+                    if (hw_decoder.init_hardware_context(video_codec_ctx, type)) {
+                        stats.hw_acceleration_status = "ENABLED (" + dev_name + ")";
+                        hw_success = true;
+                        hw_accel_active = true;
+                        break;
+                    }
                 }
             }
         }
 
         if (!hw_success) {
+            hw_accel_active = false;
             stats.hw_acceleration_status = "DISABLED (Multi-Threaded CPU Engine)";
         }
 
@@ -337,7 +363,7 @@ void VideoPlayer::decode_loop() {
             continue;
         }
 
-        // Flow control: only throttle if video queue is full AND audio buffer is adequate
+        // Flow control: throttle if video queue is full AND audio buffer is adequate
         size_t current_q_size = 0;
         {
             std::lock_guard<std::mutex> lock(frame_mutex);
@@ -345,9 +371,12 @@ void VideoPlayer::decode_loop() {
             stats.buffered_frames = static_cast<int>(current_q_size);
         }
 
-        if (current_q_size >= MAX_FRAME_QUEUE_SIZE && !seeking_preroll.load()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-            continue;
+        size_t max_q = get_max_queue_size();
+        if (current_q_size >= max_q && !seeking_preroll.load()) {
+            if (!stats.has_audio || audio_engine.get_buffer_size() >= 32768) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                continue;
+            }
         }
 
         int ret = av_read_frame(fmt_ctx, packet);
@@ -363,32 +392,27 @@ void VideoPlayer::decode_loop() {
         if (packet->stream_index == video_stream_index && video_codec_ctx) {
             auto start_time = std::chrono::high_resolution_clock::now();
 
-            int send_ret = avcodec_send_packet(video_codec_ctx, packet);
-            while (send_ret >= 0 || send_ret == AVERROR(EAGAIN)) {
-                int r = avcodec_receive_frame(video_codec_ctx, raw_frame);
-                if (r == AVERROR(EAGAIN) || r == AVERROR_EOF) {
-                    break;
-                } else if (r < 0) {
-                    break;
-                }
-
-                AVFrame* src_frame = raw_frame;
+            auto process_video_frame_fn = [&](AVFrame* in_frame) {
+                AVFrame* src_frame = in_frame;
 
                 // 1. Hardware decoding transfer if frame is in GPU surface format (VAAPI / CUDA / VDPAU / DRM)
                 AVPixelFormat hw_best_fmt = hw_decoder.find_best_pixel_format(video_codec_ctx, hw_decoder.active_device_type);
-                if (raw_frame->format == hw_best_fmt ||
-                    raw_frame->format == AV_PIX_FMT_VAAPI ||
-                    raw_frame->format == AV_PIX_FMT_CUDA ||
-                    raw_frame->format == AV_PIX_FMT_VDPAU ||
-                    raw_frame->format == AV_PIX_FMT_DRM_PRIME ||
-                    raw_frame->hw_frames_ctx != nullptr) {
+                if (in_frame->format == hw_best_fmt ||
+                    in_frame->format == AV_PIX_FMT_VAAPI ||
+                    in_frame->format == AV_PIX_FMT_CUDA ||
+                    in_frame->format == AV_PIX_FMT_VDPAU ||
+                    in_frame->format == AV_PIX_FMT_DRM_PRIME ||
+                    in_frame->hw_frames_ctx != nullptr) {
 
                     av_frame_unref(sw_frame);
-                    if (av_hwframe_transfer_data(sw_frame, raw_frame, 0) == 0) {
-                        sw_frame->pts = raw_frame->pts;
-                        sw_frame->width = raw_frame->width;
-                        sw_frame->height = raw_frame->height;
+                    if (av_hwframe_transfer_data(sw_frame, in_frame, 0) == 0) {
+                        sw_frame->pts = in_frame->pts;
+                        sw_frame->width = in_frame->width;
+                        sw_frame->height = in_frame->height;
                         src_frame = sw_frame;
+                    } else {
+                        // HW transfer failed; avoid passing invalid GPU surface to software stages
+                        return;
                     }
                 }
 
@@ -442,10 +466,7 @@ void VideoPlayer::decode_loop() {
                 if (seeking_preroll.load()) {
                     if (v_pts_sec < p_target - (frame_dur * 0.5)) {
                         // Preroll reference frame (needed for decoding subsequent frames, but skip display)
-                        if (send_ret == AVERROR(EAGAIN)) {
-                            send_ret = avcodec_send_packet(video_codec_ctx, packet);
-                        }
-                        continue;
+                        return;
                     } else {
                         // Target frame reached!
                         seeking_preroll = false;
@@ -479,40 +500,66 @@ void VideoPlayer::decode_loop() {
                         }
                     }
                 }
+            };
 
-                if (send_ret == AVERROR(EAGAIN)) {
-                    send_ret = avcodec_send_packet(video_codec_ctx, packet);
+            int send_ret = avcodec_send_packet(video_codec_ctx, packet);
+            while (send_ret == AVERROR(EAGAIN) && playing) {
+                // Internal buffers full: drain frames until packet can be accepted
+                int r = avcodec_receive_frame(video_codec_ctx, raw_frame);
+                if (r >= 0) {
+                    process_video_frame_fn(raw_frame);
+                } else if (r == AVERROR(EAGAIN)) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(200));
+                } else {
+                    break;
                 }
+                send_ret = avcodec_send_packet(video_codec_ctx, packet);
+            }
+
+            // Drain any frames produced after packet was accepted
+            while (send_ret >= 0 && playing) {
+                int r = avcodec_receive_frame(video_codec_ctx, raw_frame);
+                if (r == AVERROR(EAGAIN) || r == AVERROR_EOF || r < 0) {
+                    break;
+                }
+                process_video_frame_fn(raw_frame);
             }
         } 
         // Process Audio Stream (Thread-safe without frame_mutex lock)
         else if (packet->stream_index == audio_stream_index && audio_codec_ctx) {
-            int ret_a = avcodec_send_packet(audio_codec_ctx, packet);
-            while (ret_a >= 0 || ret_a == AVERROR(EAGAIN)) {
-                int r = avcodec_receive_frame(audio_codec_ctx, audio_frame);
-                if (r == AVERROR(EAGAIN) || r == AVERROR_EOF || r < 0) break;
-
-                double audio_pts = (audio_frame->pts != AV_NOPTS_VALUE) ? audio_frame->pts * av_q2d(audio_tb) : -1.0;
-                double audio_dur = (audio_codec_ctx->sample_rate > 0) ? (static_cast<double>(audio_frame->nb_samples) / audio_codec_ctx->sample_rate) : 0.0;
+            auto process_audio_frame_fn = [&](AVFrame* in_audio_frame) {
+                double audio_pts = (in_audio_frame->pts != AV_NOPTS_VALUE) ? in_audio_frame->pts * av_q2d(audio_tb) : -1.0;
+                double audio_dur = (audio_codec_ctx->sample_rate > 0) ? (static_cast<double>(in_audio_frame->nb_samples) / audio_codec_ctx->sample_rate) : 0.0;
                 double p_target = preroll_target_sec.load();
 
                 if (seeking_preroll.load()) {
                     if (audio_pts >= 0.0 && audio_pts + audio_dur < p_target) {
-                        // Drop audio frame prior to seek target
-                        if (ret_a == AVERROR(EAGAIN)) {
-                            ret_a = avcodec_send_packet(audio_codec_ctx, packet);
-                        }
-                        continue;
+                        return; // Drop audio frame prior to seek target
                     }
                 }
 
                 if (!paused) {
-                    audio_engine.play_chunk(audio_frame, audio_pts);
+                    audio_engine.play_chunk(in_audio_frame, audio_pts);
                 }
+            };
 
-                if (ret_a == AVERROR(EAGAIN)) {
-                    ret_a = avcodec_send_packet(audio_codec_ctx, packet);
+            int ret_a = avcodec_send_packet(audio_codec_ctx, packet);
+            while (ret_a == AVERROR(EAGAIN) && playing) {
+                int r = avcodec_receive_frame(audio_codec_ctx, audio_frame);
+                if (r >= 0) {
+                    process_audio_frame_fn(audio_frame);
+                } else if (r == AVERROR(EAGAIN)) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(200));
+                } else {
+                    break;
                 }
+                ret_a = avcodec_send_packet(audio_codec_ctx, packet);
+            }
+
+            while (ret_a >= 0 && playing) {
+                int r = avcodec_receive_frame(audio_codec_ctx, audio_frame);
+                if (r == AVERROR(EAGAIN) || r == AVERROR_EOF || r < 0) break;
+                process_audio_frame_fn(audio_frame);
             }
         }
 
@@ -523,11 +570,12 @@ void VideoPlayer::decode_loop() {
     av_packet_free(&packet);
 }
 
-void VideoPlayer::render_current_frame(ShaderRenderer& renderer, int win_w, int win_h) {
-#if defined(VMP_HEADLESS_CLI)
+void VideoPlayer::render_current_frame(ShaderRenderer& renderer, int win_w, int win_h, bool menu_bar_visible) {
+#if defined(VMP_HEADLESS_CLI) || defined(OCULUS_HEADLESS_CLI)
     (void)renderer;
     (void)win_w;
     (void)win_h;
+    (void)menu_bar_visible;
 #else
     {
         std::lock_guard<std::mutex> lock(frame_mutex);
@@ -556,12 +604,12 @@ void VideoPlayer::render_current_frame(ShaderRenderer& renderer, int win_w, int 
 
             double frame_duration = (stream_fps > 0.0) ? (1.0 / stream_fps) : 0.04166;
             double early_tolerance = std::min(0.012, frame_duration * 0.45);
-            double late_threshold = std::max(0.04, frame_duration * 1.5);
+            double late_threshold = std::max(0.10, frame_duration * 2.5);
 
-            // Drop obsolete frames if video fell behind master sync clock
+            // Drop obsolete frames only if video fell significantly behind master sync clock
             while (frame_queue.size() > 1) {
                 double cur_pts = frame_queue.front().pts;
-                if (cur_pts < sync_clock - late_threshold || cur_pts < sync_clock - (frame_duration * 0.8)) {
+                if (cur_pts < sync_clock - late_threshold) {
                     AVFrame* stale = frame_queue.front().frame;
                     if (stale) av_frame_free(&stale);
                     frame_queue.pop();

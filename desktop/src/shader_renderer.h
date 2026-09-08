@@ -123,7 +123,10 @@ public:
 
     static bool save_framebuffer_screenshot(int width, int height, const std::string& filepath);
     
-    void render(int window_width, int window_height);
+    void clear_video_frame();
+    bool has_frame() const { return has_video_frame; }
+
+    void render(int window_width, int window_height, bool menu_bar_visible = true);
     void render_ui_overlay(int window_width, int window_height, double current_sec, double total_sec, 
                            bool is_paused, bool is_fullscreen, float ui_alpha, double mouse_x, double mouse_y, 
                            bool is_scrubbing, bool show_stats, const std::string& video_name, 
@@ -139,12 +142,21 @@ public:
     float get_text_width(const std::string& text, float font_size);
 
     void render_vlc_menu_bar(int window_width, int window_height, double mouse_x, double mouse_y,
-                            int active_menu_idx, float menu_alpha = 1.0f, const std::string& title = "");
+                            int active_menu_idx, float menu_alpha = 1.0f);
     void render_vlc_dropdown(int window_width, int window_height, double mouse_x, double mouse_y,
-                            int menu_idx);
+                            int menu_idx, float custom_x = -1.0f, float custom_y = -1.0f);
     int hit_test_vlc_menu_bar(int window_width, int window_height, double mouse_x, double mouse_y);
-    VlcMenuAction hit_test_vlc_dropdown(int window_width, int window_height, double mouse_x, double mouse_y, int menu_idx);
-    bool is_mouse_inside_dropdown(int window_width, int window_height, double mouse_x, double mouse_y, int menu_idx);
+    VlcMenuAction hit_test_vlc_dropdown(int window_width, int window_height, double mouse_x, double mouse_y,
+                                        int menu_idx, float custom_x = -1.0f, float custom_y = -1.0f);
+    bool is_mouse_inside_dropdown(int window_width, int window_height, double mouse_x, double mouse_y,
+                                  int menu_idx, float custom_x = -1.0f, float custom_y = -1.0f);
+
+    void render_vlc_context_menu(int window_width, int window_height, double mouse_x, double mouse_y,
+                                float ctx_x, float ctx_y, int active_submenu_idx);
+    int hit_test_vlc_context_menu_category(int window_width, int window_height, double mouse_x, double mouse_y,
+                                          float ctx_x, float ctx_y);
+    bool is_mouse_inside_context_menu(int window_width, int window_height, double mouse_x, double mouse_y,
+                                     float ctx_x, float ctx_y, int active_submenu_idx);
 
 private:
     std::vector<VlcMenuCategory> vlc_menus;
@@ -192,6 +204,7 @@ private:
     GLuint uv_texture = 0;
     GLuint thumbnail_texture = 0;
     bool has_thumbnail_texture = false;
+    bool has_video_frame = false;
     int thumbnail_width = 160;
     int thumbnail_height = 90;
     
@@ -202,7 +215,7 @@ private:
     int format_mode = 0; // 0: YUV420P, 1: NV12, 2: RGB
     int allocated_format = -1;
     bool hdr_enabled = false;
-    bool sharpness_enabled = true; // CAS GPU Sharpness Filter enabled by default for ultra-clarity
+    bool sharpness_enabled = false; // Default OFF for maximum 4K/60FPS/120FPS GPU fillrate
     float sharpness_strength = 0.65f;
     float brightness = 0.0f;
     float contrast = 1.0f;

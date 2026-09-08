@@ -36,6 +36,7 @@ struct VMPStats {
     std::string hw_acceleration_status;
     bool has_audio = false;
 };
+using OculusStats = VMPStats;
 
 class VideoPlayer {
 public:
@@ -56,7 +57,7 @@ public:
     double get_duration() const { return duration_sec; }
     double get_stream_fps() const { return stream_fps; }
     
-    void render_current_frame(ShaderRenderer& renderer, int win_w, int win_h);
+    void render_current_frame(ShaderRenderer& renderer, int win_w, int win_h, bool menu_bar_visible = true);
     
     VMPStats get_stats();
     bool is_playing() const { return playing; }
@@ -74,7 +75,24 @@ public:
     void set_playback_speed(float speed);
     float get_playback_speed() const { return playback_speed; }
 
+    enum class HWAccelMode {
+        AUTO,
+        FORCE_HW,
+        FORCE_CPU
+    };
+    void set_hw_accel_mode(HWAccelMode mode) { hw_accel_mode = mode; }
+    HWAccelMode get_hw_accel_mode() const { return hw_accel_mode; }
+    bool is_hw_accel_active() const { return hw_accel_active; }
+
+    size_t get_max_queue_size() const {
+        if (stream_fps >= 100.0) return 96;
+        if (stream_fps >= 50.0) return 64;
+        return 32;
+    }
+
 private:
+    HWAccelMode hw_accel_mode = HWAccelMode::AUTO;
+    bool hw_accel_active = false;
     float playback_speed = 1.0f;
     double stream_fps = 24.0;
     AVFormatContext* fmt_ctx = nullptr;

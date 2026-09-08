@@ -11,8 +11,14 @@ enum AVPixelFormat get_hw_format(AVCodecContext* ctx, const enum AVPixelFormat* 
             return *p;
         }
     }
-    std::cerr << "[VMP HW] Failed to get HW surface format. Falling back to SW." << std::endl;
-    return AV_PIX_FMT_NONE;
+    std::cerr << "[VMP HW] Note: Hardware surface format unavailable. Falling back to software decoding." << std::endl;
+    for (p = pix_fmts; *p != -1; p++) {
+        const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(*p);
+        if (desc && !(desc->flags & AV_PIX_FMT_FLAG_HWACCEL)) {
+            return *p;
+        }
+    }
+    return pix_fmts[0];
 }
 
 HardwareDecoder::HardwareDecoder() {}
@@ -28,27 +34,22 @@ std::vector<std::string> HardwareDecoder::get_supported_hw_devices() {
     
     // Priority order for optimal Linux video hardware decoding performance
     const std::vector<std::string> priority_order = {
-        "vaapi", "cuda", "drm", "vdpau", "qsv", "vulkan"
+        "vaapi", "cuda", "vulkan", "drm", "qsv", "vdpau"
     };
 
-    std::cout << "[VMP Engine] Probing available HW Acceleration Engines on Linux..." << std::endl;
+    std::cout << "[VMP Engine] Probing active HW Acceleration Engines on Linux..." << std::endl;
     for (const auto& dev_name : priority_order) {
         enum AVHWDeviceType type = av_hwdevice_find_type_by_name(dev_name.c_str());
         if (type != AV_HWDEVICE_TYPE_NONE) {
-            supported_devices.push_back(dev_name);
-            std::cout << " -> Found HW Engine: " << dev_name << std::endl;
-        }
-    }
-    
-    // Also include any other device types reported by FFmpeg
-    enum AVHWDeviceType type = AV_HWDEVICE_TYPE_NONE;
-    while ((type = av_hwdevice_iterate_types(type)) != AV_HWDEVICE_TYPE_NONE) {
-        const char* name = av_hwdevice_get_type_name(type);
-        if (name) {
-            std::string sname(name);
-            if (std::find(supported_devices.begin(), supported_devices.end(), sname) == supported_devices.end()) {
-                supported_devices.push_back(sname);
-                std::cout << " -> Found HW Engine: " << sname << std::endl;
+            AVBufferRef* test_ctx = nullptr;
+            int err = av_hwdevice_ctx_create(&test_ctx, type, NULL, NULL, 0);
+            if (err < 0 && type == AV_HWDEVICE_TYPE_VAAPI) {
+                err = av_hwdevice_ctx_create(&test_ctx, type, "/dev/dri/renderD128", NULL, 0);
+            }
+            if (err >= 0 && test_ctx != nullptr) {
+                supported_devices.push_back(dev_name);
+                std::cout << " -> Found Active HW Engine: " << dev_name << std::endl;
+                av_buffer_unref(&test_ctx);
             }
         }
     }
