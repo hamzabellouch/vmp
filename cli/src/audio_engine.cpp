@@ -15,7 +15,7 @@ void AudioEngine::sdl_audio_callback(void* userdata, Uint8* stream, int len) {
     std::lock_guard<std::mutex> lock(engine->audio_mutex);
 
     memset(stream, 0, len);
-    if (engine->audio_queue.empty() || engine->is_muted) {
+    if (engine->audio_queue.empty()) {
         engine->last_callback_time = std::chrono::high_resolution_clock::now();
         return;
     }
@@ -38,9 +38,11 @@ void AudioEngine::sdl_audio_callback(void* userdata, Uint8* stream, int len) {
         size_t chunk_remaining = chunk.pcm_data.size() - chunk.read_offset;
         size_t to_copy = std::min(bytes_needed, chunk_remaining);
 
-        int sdl_vol = static_cast<int>(SDL_MIX_MAXVOLUME * std::min(1.0f, engine->current_volume));
-        SDL_MixAudioFormat(stream + stream_pos, chunk.pcm_data.data() + chunk.read_offset, 
-                           AUDIO_S16SYS, to_copy, sdl_vol);
+        if (!engine->is_muted && engine->current_volume > 0.0f) {
+            int sdl_vol = static_cast<int>(SDL_MIX_MAXVOLUME * std::min(1.0f, engine->current_volume));
+            SDL_MixAudioFormat(stream + stream_pos, chunk.pcm_data.data() + chunk.read_offset, 
+                               AUDIO_S16SYS, to_copy, sdl_vol);
+        }
 
         chunk.read_offset += to_copy;
         stream_pos += to_copy;
@@ -58,7 +60,7 @@ void AudioEngine::sdl_audio_callback(void* userdata, Uint8* stream, int len) {
     }
 
     // Volume boost (> 100%) digital gain with soft clipping
-    if (engine->current_volume > 1.0f) {
+    if (!engine->is_muted && engine->current_volume > 1.0f) {
         int16_t* samples = reinterpret_cast<int16_t*>(stream);
         int num_samples = len / sizeof(int16_t);
         float gain = engine->current_volume;

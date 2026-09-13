@@ -10,6 +10,7 @@
 struct FolderMediaItem {
     std::string filepath;
     std::string filename;
+    std::string folder_name;
     std::string size_str;
     std::string date_str;
     std::string duration_str;
@@ -158,6 +159,9 @@ public:
     bool is_mouse_inside_context_menu(int window_width, int window_height, double mouse_x, double mouse_y,
                                      float ctx_x, float ctx_y, int active_submenu_idx);
 
+    void render_about_dialog(int window_width, int window_height, double mouse_x, double mouse_y);
+    int hit_test_about_dialog(int window_width, int window_height, double mouse_x, double mouse_y);
+
 private:
     std::vector<VlcMenuCategory> vlc_menus;
     void init_vlc_menus();
@@ -177,6 +181,7 @@ private:
     GLuint tex_icon_fullscreen_exit = 0;
     GLuint tex_icon_indicator = 0;
     GLuint tex_icon_stats = 0;
+    GLuint tex_icon_arrow_back = 0;
 
     struct GlyphTexture {
         GLuint texture = 0;

@@ -142,6 +142,20 @@ gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor 2>/dev/null || true
 
 ---
 
+## 🔄 Updating VMP Desktop
+
+When pulling updates or modifying source code, rebuild the binary so that the desktop launcher uses the latest build:
+
+```bash
+# Option 1: Re-run the automated installer
+./install.sh
+
+# Option 2: Rebuild desktop in-place
+cmake --build build -j$(nproc)
+```
+
+---
+
 ## 🗑️ Uninstallation
 
 ```bash

@@ -297,7 +297,36 @@ sudo ln -sf /usr/local/bin/vmp_cli /usr/local/bin/vmp-cli
 
 ---
 
-### 4. Uninstallation
+### 4. Updating VMP (Applying Updates & Rebuilding)
+
+When pulling new updates from Git or modifying the codebase, rebuild the binaries to ensure your desktop environment launches the updated version:
+
+#### Method A: 1-Click Update (Recommended)
+Simply re-run the automated installer:
+```bash
+git pull
+cd desktop
+./install.sh
+```
+
+#### Method B: Fast In-Place Rebuild
+If you already have icons and `.desktop` shortcuts registered, simply rebuild the desktop target:
+```bash
+# Rebuild the desktop engine used by the desktop shortcuts:
+cmake --build desktop/build -j$(nproc)
+
+# If you also use the CLI tool:
+cmake --build cli/build -j$(nproc)
+cp -f cli/build/vmp_cli ~/.local/bin/vmp_cli
+```
+
+> [!TIP]
+> **Troubleshooting: "Changes not appearing when opening videos":**  
+> If you installed VMP via `desktop/install.sh`, your desktop and file-manager shortcuts (`~/.local/share/applications/vmp.desktop`) are linked directly to `desktop/build/vmp_engine`. Compiling only from the root directory (`cmake -B build`) builds into `build/desktop/vmp_engine` instead of `desktop/build/vmp_engine`. To ensure updates take effect, always re-run `./install.sh` or run `cmake --build desktop/build`.
+
+---
+
+### 5. Uninstallation
 
 To cleanly remove VMP shortcuts, application menu entries, icons, and binaries:
 

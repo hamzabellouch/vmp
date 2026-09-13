@@ -196,6 +196,11 @@ static bool is_image_file(const std::string& path) {
 }
 
 static bool is_video_file(const std::string& path) {
+    if (path.length() >= 5) {
+        std::string lower_tail = path.substr(path.length() - 5);
+        for (char& c : lower_tail) c = std::tolower(c);
+        if (lower_tail == ".d.ts") return false;
+    }
     std::string ext = "";
     size_t dot = path.find_last_of('.');
     if (dot != std::string::npos) {
@@ -402,6 +407,7 @@ int main(int argc, char** argv) {
 
     bool is_fullscreen = false;
     int active_menu_idx = -1;
+    bool show_about_dialog = false;
     bool context_menu_active = false;
     float context_menu_x = 0.0f;
     float context_menu_y = 0.0f;
@@ -657,6 +663,8 @@ int main(int argc, char** argv) {
                         FolderMediaItem item;
                         item.filepath = fpath;
                         item.filename = entry.path().filename().string();
+                        item.folder_name = entry.path().parent_path().filename().string();
+                        if (item.folder_name.empty()) item.folder_name = "Folder";
                         item.size_str = get_file_size_string(item.filepath);
                         item.date_str = get_file_date_string(item.filepath);
 
@@ -684,6 +692,123 @@ int main(int argc, char** argv) {
         }
     };
 
+    auto scan_all_system_videos_fn = [&]() -> bool {
+        current_folder_path = "ALL_VIDEOS";
+        for (auto& item : folder_media_items) {
+            if (item.thumb_tex != 0) {
+                glDeleteTextures(1, &item.thumb_tex);
+                item.thumb_tex = 0;
+            }
+        }
+        folder_media_items.clear();
+        playlist_files.clear();
+
+        const char* home_env = std::getenv("HOME");
+        std::string home_dir = home_env ? home_env : "/home";
+
+        std::vector<std::string> search_roots = {
+            home_dir + "/Videos",
+            home_dir + "/Downloads",
+            home_dir + "/Desktop",
+            home_dir + "/Movies",
+            home_dir + "/Documents",
+            home_dir
+        };
+
+        if (std::filesystem::exists("/media")) search_roots.push_back("/media");
+        if (std::filesystem::exists("/mnt")) search_roots.push_back("/mnt");
+
+        std::unordered_set<std::string> visited_canonical_paths;
+        std::vector<std::string> found_video_paths;
+
+        auto should_skip_dir = [](const std::filesystem::path& p) -> bool {
+            std::string name = p.filename().string();
+            if (name.empty()) return false;
+            if (name[0] == '.') return true;
+            static const std::unordered_set<std::string> skip_names = {
+                "build", "node_modules", "CMakeFiles", "__pycache__", ".git", "venv", ".venv", "env"
+            };
+            return skip_names.count(name) > 0;
+        };
+
+        for (const auto& root_dir : search_roots) {
+            try {
+                if (!std::filesystem::exists(root_dir) || !std::filesystem::is_directory(root_dir)) {
+                    continue;
+                }
+
+                bool is_home_root = (root_dir == home_dir);
+                int max_depth = is_home_root ? 2 : 4;
+
+                for (auto it = std::filesystem::recursive_directory_iterator(root_dir, std::filesystem::directory_options::skip_permission_denied);
+                     it != std::filesystem::recursive_directory_iterator(); ++it) {
+                    
+                    if (it.depth() > max_depth) {
+                        it.pop();
+                        continue;
+                    }
+
+                    if (it->is_directory()) {
+                        if (should_skip_dir(it->path())) {
+                            it.disable_recursion_pending();
+                        }
+                        continue;
+                    }
+
+                    if (it->is_regular_file()) {
+                        std::string fpath = it->path().string();
+                        if (is_video_file(fpath)) {
+                            std::string canonical_str = fpath;
+                            try {
+                                canonical_str = std::filesystem::canonical(it->path()).string();
+                            } catch (...) {
+                                canonical_str = fpath;
+                            }
+                            if (visited_canonical_paths.insert(canonical_str).second) {
+                                found_video_paths.push_back(fpath);
+                            }
+                        }
+                    }
+                }
+            } catch (...) {
+            }
+        }
+
+        for (const auto& fpath : found_video_paths) {
+            FolderMediaItem item;
+            item.filepath = fpath;
+            std::filesystem::path p(fpath);
+            item.filename = p.filename().string();
+            item.folder_name = p.parent_path().filename().string();
+            if (item.folder_name.empty()) item.folder_name = "Home";
+            item.size_str = get_file_size_string(item.filepath);
+            item.date_str = get_file_date_string(item.filepath);
+
+            std::vector<uint8_t> thumb_rgb;
+            int tw = 0, th = 0;
+            extract_media_metadata_and_thumb(item.filepath, item.duration_str, item.duration_sec, thumb_rgb, tw, th);
+            if (!thumb_rgb.empty()) {
+                item.thumb_tex = ShaderRenderer::create_rgb_texture(thumb_rgb.data(), tw, th);
+                item.thumb_w = tw;
+                item.thumb_h = th;
+            }
+            folder_media_items.push_back(item);
+        }
+
+        std::sort(folder_media_items.begin(), folder_media_items.end(), [](const FolderMediaItem& a, const FolderMediaItem& b) {
+            if (a.folder_name != b.folder_name) {
+                return a.folder_name < b.folder_name;
+            }
+            return a.filename < b.filename;
+        });
+
+        for (const auto& item : folder_media_items) {
+            playlist_files.push_back(item.filepath);
+        }
+
+        return !folder_media_items.empty();
+    };
+
     if (!playlist_files.empty()) {
         std::string first_arg = playlist_files[0];
         if (std::filesystem::is_directory(first_arg)) {
@@ -701,11 +826,14 @@ int main(int argc, char** argv) {
                 return 1;
             }
         }
+    } else {
+        if (scan_all_system_videos_fn()) {
+            app_state = AppState::FOLDER_GALLERY;
+        } else {
+            app_state = AppState::WELCOME;
+        }
     }
 
-    float current_zoom = 1.0f;
-    float pan_x = 0.0f;
-    float pan_y = 0.0f;
     bool hdr_toggle = false;
     renderer.set_hdr_tone_mapping(hdr_toggle);
 
@@ -723,6 +851,12 @@ int main(int argc, char** argv) {
     bool vsync_enabled = true;
     bool left_pressed_prev = false;
     bool right_pressed_prev = false;
+    bool up_pressed_prev = false;
+    bool down_pressed_prev = false;
+    auto vol_up_press_start = std::chrono::high_resolution_clock::now();
+    auto vol_down_press_start = std::chrono::high_resolution_clock::now();
+    auto last_vol_up_time = std::chrono::high_resolution_clock::now();
+    auto last_vol_down_time = std::chrono::high_resolution_clock::now();
     bool j_pressed_prev = false;
     bool k_pressed_prev = false;
     bool o_pressed_prev = false;
@@ -840,17 +974,34 @@ int main(int argc, char** argv) {
                     break;
                 }
                 case VlcMenuAction::AUDIO_VOL_UP: {
-                    osd_notification = "Volume: +10%";
+                    float cur_vol = player.get_volume();
+                    float new_vol = std::min(1.5f, cur_vol + 0.05f);
+                    player.set_volume(new_vol);
+                    int vol_pct = static_cast<int>(std::round(new_vol * 100));
+                    std::string vol_icon = (vol_pct == 0) ? "🔇" : (vol_pct > 100 ? "⚡" : "🔊");
+                    osd_notification = "Volume: " + std::to_string(vol_pct) + "% " + vol_icon;
                     osd_notification_time = now;
                     break;
                 }
                 case VlcMenuAction::AUDIO_VOL_DOWN: {
-                    osd_notification = "Volume: -10%";
+                    float cur_vol = player.get_volume();
+                    float new_vol = std::max(0.0f, cur_vol - 0.05f);
+                    player.set_volume(new_vol);
+                    int vol_pct = static_cast<int>(std::round(new_vol * 100));
+                    std::string vol_icon = (vol_pct == 0) ? "🔇" : (vol_pct > 100 ? "⚡" : "🔊");
+                    osd_notification = "Volume: " + std::to_string(vol_pct) + "% " + vol_icon;
                     osd_notification_time = now;
                     break;
                 }
                 case VlcMenuAction::AUDIO_MUTE: {
-                    osd_notification = "Audio Mute Toggled";
+                    player.toggle_mute();
+                    if (player.is_muted()) {
+                        osd_notification = "Mute: ON 🔇";
+                    } else {
+                        int vol_pct = static_cast<int>(std::round(player.get_volume() * 100));
+                        std::string vol_icon = (vol_pct == 0) ? "🔇" : (vol_pct > 100 ? "⚡" : "🔊");
+                        osd_notification = "Volume: " + std::to_string(vol_pct) + "% " + vol_icon;
+                    }
                     osd_notification_time = now;
                     break;
                 }
@@ -902,14 +1053,18 @@ int main(int argc, char** argv) {
                 case VlcMenuAction::VIEW_GALLERY: {
                     if (!folder_media_items.empty()) {
                         app_state = AppState::FOLDER_GALLERY;
+                    } else if (scan_all_system_videos_fn()) {
+                        app_state = AppState::FOLDER_GALLERY;
                     } else {
                         app_state = AppState::WELCOME;
                     }
                     break;
                 }
                 case VlcMenuAction::HELP_ABOUT: {
-                    osd_notification = "VMP v0.0.2-beta - Video Max Player";
-                    osd_notification_time = now;
+                    show_about_dialog = true;
+                    active_menu_idx = -1;
+                    context_menu_active = false;
+                    context_submenu_idx = -1;
                     break;
                 }
                 default:
@@ -1071,6 +1226,11 @@ int main(int argc, char** argv) {
                     app_state = AppState::PLAYING;
                     player.set_paused(false);
                 }
+            } else if (scan_all_system_videos_fn()) {
+                if (app_state == AppState::PLAYING) {
+                    player.set_paused(true);
+                }
+                app_state = AppState::FOLDER_GALLERY;
             }
             g_pressed_prev = true;
         } else if (!g_pressed_now) {
@@ -1102,7 +1262,15 @@ int main(int argc, char** argv) {
 
             if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
                 if (!mouse_left_prev) {
-                    if (check_vlc_menu_click_fn()) {
+                    if (show_about_dialog) {
+                        int hit = renderer.hit_test_about_dialog(width, height, mx, my);
+                        if (hit == 1 || hit == -1) {
+                            show_about_dialog = false;
+                        } else if (hit == 2) {
+                            int ret = system("xdg-open https://github.com/hamzabellouch/vmp >/dev/null 2>&1 &");
+                            (void)ret;
+                        }
+                    } else if (check_vlc_menu_click_fn()) {
                         // Handled by VLC menu bar
                     } else {
                         float btn_w = 200.0f * scale;
@@ -1138,7 +1306,7 @@ int main(int argc, char** argv) {
                 mouse_left_prev = false;
             }
 
-            if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
+            if (!show_about_dialog && glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
                 if (!mouse_right_prev) {
                     active_menu_idx = -1;
                     context_menu_active = true;
@@ -1161,11 +1329,16 @@ int main(int argc, char** argv) {
             if (context_menu_active) {
                 renderer.render_vlc_context_menu(width, height, mx, my, context_menu_x, context_menu_y, context_submenu_idx);
             }
+            if (show_about_dialog) {
+                renderer.render_about_dialog(width, height, mx, my);
+            }
             glfwSwapBuffers(window);
             glfwPollEvents();
 
             if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-                if (context_menu_active) {
+                if (show_about_dialog) {
+                    show_about_dialog = false;
+                } else if (context_menu_active) {
                     context_menu_active = false;
                     context_submenu_idx = -1;
                 } else if (active_menu_idx >= 0) {
@@ -1183,7 +1356,15 @@ int main(int argc, char** argv) {
         if (app_state == AppState::FOLDER_GALLERY) {
             if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
                 if (!mouse_left_prev) {
-                    if (check_vlc_menu_click_fn()) {
+                    if (show_about_dialog) {
+                        int hit = renderer.hit_test_about_dialog(width, height, mx, my);
+                        if (hit == 1 || hit == -1) {
+                            show_about_dialog = false;
+                        } else if (hit == 2) {
+                            int ret = system("xdg-open https://github.com/hamzabellouch/vmp >/dev/null 2>&1 &");
+                            (void)ret;
+                        }
+                    } else if (check_vlc_menu_click_fn()) {
                         // Handled by VLC menu bar
                     } else {
                         // Check "SELECT FOLDER" button on top right (adjusted below menu bar if not fullscreen)
@@ -1212,7 +1393,7 @@ int main(int argc, char** argv) {
                             int num_cols = std::max(2, std::min(6, static_cast<int>((avail_w + gap_x) / 240.0f)));
                             float card_w = (avail_w - (num_cols - 1) * gap_x) / num_cols;
                             float thumb_h = card_w * (9.0f / 16.0f);
-                            float text_h = 44.0f;
+                            float text_h = 56.0f;
                             float card_h = thumb_h + text_h;
 
                             for (size_t i = 0; i < folder_media_items.size(); i++) {
@@ -1241,7 +1422,7 @@ int main(int argc, char** argv) {
                 mouse_left_prev = false;
             }
 
-            if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
+            if (!show_about_dialog && glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
                 if (!mouse_right_prev) {
                     active_menu_idx = -1;
                     context_menu_active = true;
@@ -1264,11 +1445,16 @@ int main(int argc, char** argv) {
             if (context_menu_active) {
                 renderer.render_vlc_context_menu(width, height, mx, my, context_menu_x, context_menu_y, context_submenu_idx);
             }
+            if (show_about_dialog) {
+                renderer.render_about_dialog(width, height, mx, my);
+            }
             glfwSwapBuffers(window);
             glfwPollEvents();
 
             if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-                if (context_menu_active) {
+                if (show_about_dialog) {
+                    show_about_dialog = false;
+                } else if (context_menu_active) {
                     context_menu_active = false;
                     context_submenu_idx = -1;
                 } else if (active_menu_idx >= 0) {
@@ -1298,11 +1484,11 @@ int main(int argc, char** argv) {
 
         // Mouse Drag Scrubbing & Click Controls
         float center_y = height - 40.0f;
-        float icon_size = 22.0f;
+        float icon_size = 26.0f;
 
         float replay_x = 24.0f;
-        float play_x = 58.0f;
-        float forward_x = 92.0f;
+        float play_x = 62.0f;
+        float forward_x = 100.0f;
         float icon_y = center_y - (icon_size / 2.0f);
 
         bool has_hours = (player.get_duration() >= 3600.0);
@@ -1314,18 +1500,18 @@ int main(int argc, char** argv) {
         float fs_x = width - 42.0f;
         float fs_y = center_y - (icon_size / 2.0f);
 
-        float back_btn_w = 110.0f;
-        float back_btn_h = 32.0f;
-        float back_btn_x = width - back_btn_w - 20.0f;
+        float back_btn_w = 30.0f;
+        float back_btn_h = 30.0f;
+        float back_btn_x = 20.0f;
         float back_btn_y = is_fullscreen ? 16.0f : 36.0f;
 
-        float stats_x = back_btn_x - 38.0f;
-        float stats_y = back_btn_y + 5.0f;
+        float stats_x = width - icon_size - 20.0f;
+        float stats_y = back_btn_y + (back_btn_h - icon_size) / 2.0f;
 
         float bar_w = (fs_x - 15.0f) - bar_x;
         float bar_y = center_y;
 
-        if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
+        if (!show_about_dialog && glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
             last_user_activity = now;
             if (!mouse_right_prev) {
                 active_menu_idx = -1;
@@ -1342,11 +1528,19 @@ int main(int argc, char** argv) {
         if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
             last_user_activity = now;
             if (!mouse_left_prev) {
-                if (check_vlc_menu_click_fn()) {
+                if (show_about_dialog) {
+                    int hit = renderer.hit_test_about_dialog(width, height, mx, my);
+                    if (hit == 1 || hit == -1) {
+                        show_about_dialog = false;
+                    } else if (hit == 2) {
+                        int ret = system("xdg-open https://github.com/hamzabellouch/vmp >/dev/null 2>&1 &");
+                        (void)ret;
+                    }
+                } else if (check_vlc_menu_click_fn()) {
                     // Handled by VLC menu bar or context menu
                 }
-                // Check click on BACK button (at top-right, only in windowed mode)
-                else if (!is_fullscreen && mx >= back_btn_x && mx <= back_btn_x + back_btn_w && my >= back_btn_y && my <= back_btn_y + back_btn_h) {
+                // Check click on BACK button (at top-left, frameless Material Symbols icon, in both windowed and fullscreen modes)
+                else if (mx >= back_btn_x - 4.0f && mx <= back_btn_x + back_btn_w + 4.0f && my >= back_btn_y - 4.0f && my <= back_btn_y + back_btn_h + 4.0f) {
                     if (!video_filename.empty() && current_file_idx < playlist_files.size()) {
                         ResumeManager::get_instance().save_position(playlist_files[current_file_idx], player.get_current_time(), player.get_duration());
                     }
@@ -1356,6 +1550,8 @@ int main(int argc, char** argv) {
                     video_filename.clear();
                     if (!folder_media_items.empty()) {
                         app_state = AppState::FOLDER_GALLERY;
+                    } else if (scan_all_system_videos_fn()) {
+                        app_state = AppState::FOLDER_GALLERY;
                     } else {
                         app_state = AppState::WELCOME;
                     }
@@ -1364,8 +1560,8 @@ int main(int argc, char** argv) {
                 else if (mx >= fs_x - 12.0f && mx <= fs_x + icon_size + 12.0f && my >= fs_y - 12.0f && my <= fs_y + icon_size + 12.0f) {
                     toggle_fullscreen_fn(window);
                 }
-                // Check click on Stats button icon (at top-right, left of BACK, only in windowed mode)
-                else if (!is_fullscreen && mx >= stats_x - 10.0f && mx <= stats_x + icon_size + 10.0f && my >= stats_y - 10.0f && my <= stats_y + icon_size + 10.0f) {
+                // Check click on Stats button icon (at top-right, left of BACK, in both windowed and fullscreen modes)
+                else if (mx >= stats_x - 10.0f && mx <= stats_x + icon_size + 10.0f && my >= stats_y - 10.0f && my <= stats_y + icon_size + 10.0f) {
                     show_stats = !show_stats;
                     std::cout << "[VMP Engine] Toggle Stats Display: " << (show_stats ? "ON" : "OFF") << std::endl;
                 }
@@ -1445,7 +1641,7 @@ int main(int argc, char** argv) {
         }
 
         // Keyboard Controls
-        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS && !space_pressed_prev) {
+        if (!show_about_dialog && glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS && !space_pressed_prev) {
             player.toggle_pause();
             osd_notification = player.is_paused() ? "Pause" : "Play";
             osd_notification_time = now;
@@ -1504,9 +1700,64 @@ int main(int argc, char** argv) {
             k_pressed_prev = false;
         }
         
-        if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) { current_zoom += 0.02f; last_user_activity = now; }
-        if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) { current_zoom = std::max(0.2f, current_zoom - 0.02f); last_user_activity = now; }
-        if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) { current_zoom = 1.0f; pan_x = 0.0f; pan_y = 0.0f; last_user_activity = now; }
+        // Volume Controls (Up / Down Arrow Keys)
+        if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) {
+            bool trigger = false;
+            if (!up_pressed_prev) {
+                trigger = true;
+                vol_up_press_start = now;
+                last_vol_up_time = now;
+            } else {
+                double held_time = std::chrono::duration<double>(now - vol_up_press_start).count();
+                double step_time = std::chrono::duration<double>(now - last_vol_up_time).count();
+                if (held_time >= 0.25 && step_time >= 0.08) {
+                    trigger = true;
+                    last_vol_up_time = now;
+                }
+            }
+            if (trigger) {
+                float cur_vol = player.get_volume();
+                float new_vol = std::min(1.5f, cur_vol + 0.05f);
+                player.set_volume(new_vol);
+                int vol_pct = static_cast<int>(std::round(new_vol * 100));
+                std::string vol_icon = (vol_pct == 0) ? "🔇" : (vol_pct > 100 ? "⚡" : "🔊");
+                osd_notification = "Volume: " + std::to_string(vol_pct) + "% " + vol_icon;
+                osd_notification_time = now;
+                last_user_activity = now;
+            }
+            up_pressed_prev = true;
+        } else if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_RELEASE) {
+            up_pressed_prev = false;
+        }
+
+        if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) {
+            bool trigger = false;
+            if (!down_pressed_prev) {
+                trigger = true;
+                vol_down_press_start = now;
+                last_vol_down_time = now;
+            } else {
+                double held_time = std::chrono::duration<double>(now - vol_down_press_start).count();
+                double step_time = std::chrono::duration<double>(now - last_vol_down_time).count();
+                if (held_time >= 0.25 && step_time >= 0.08) {
+                    trigger = true;
+                    last_vol_down_time = now;
+                }
+            }
+            if (trigger) {
+                float cur_vol = player.get_volume();
+                float new_vol = std::max(0.0f, cur_vol - 0.05f);
+                player.set_volume(new_vol);
+                int vol_pct = static_cast<int>(std::round(new_vol * 100));
+                std::string vol_icon = (vol_pct == 0) ? "🔇" : (vol_pct > 100 ? "⚡" : "🔊");
+                osd_notification = "Volume: " + std::to_string(vol_pct) + "% " + vol_icon;
+                osd_notification_time = now;
+                last_user_activity = now;
+            }
+            down_pressed_prev = true;
+        } else if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_RELEASE) {
+            down_pressed_prev = false;
+        }
 
         bool shift_held = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS);
 
@@ -1906,7 +2157,7 @@ int main(int argc, char** argv) {
             osd_notification_time = now; last_user_activity = now; k0_prev = true;
         } else if (glfwGetKey(window, GLFW_KEY_0) == GLFW_RELEASE) k0_prev = false;
 
-        renderer.set_transform(current_zoom, pan_x, pan_y);
+        renderer.set_transform(1.0f, 0.0f, 0.0f);
 
         // Check for video end (next file transition or loop)
         if (player.get_duration() > 0.0 && player.get_current_time() >= player.get_duration() - 0.25) {
@@ -1967,6 +2218,9 @@ int main(int argc, char** argv) {
         if (context_menu_active) {
             renderer.render_vlc_context_menu(width, height, mx, my, context_menu_x, context_menu_y, context_submenu_idx);
         }
+        if (show_about_dialog) {
+            renderer.render_about_dialog(width, height, mx, my);
+        }
         auto t_ui_done = std::chrono::high_resolution_clock::now();
 
         auto t_swap_start = std::chrono::high_resolution_clock::now();
@@ -2001,7 +2255,9 @@ int main(int argc, char** argv) {
 
         bool esc_pressed_now = (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS);
         if (esc_pressed_now && !esc_pressed_prev) {
-            if (context_menu_active) {
+            if (show_about_dialog) {
+                show_about_dialog = false;
+            } else if (context_menu_active) {
                 context_menu_active = false;
                 context_submenu_idx = -1;
             } else if (active_menu_idx >= 0) {
@@ -2018,6 +2274,8 @@ int main(int argc, char** argv) {
                 video_filename.clear();
                 glfwSetWindowTitle(window, "VMP");
                 if (!folder_media_items.empty()) {
+                    app_state = AppState::FOLDER_GALLERY;
+                } else if (scan_all_system_videos_fn()) {
                     app_state = AppState::FOLDER_GALLERY;
                 } else {
                     app_state = AppState::WELCOME;

@@ -203,6 +203,7 @@ ShaderRenderer::~ShaderRenderer() {
     if (tex_icon_fullscreen_exit) glDeleteTextures(1, &tex_icon_fullscreen_exit);
     if (tex_icon_indicator) glDeleteTextures(1, &tex_icon_indicator);
     if (tex_icon_stats) glDeleteTextures(1, &tex_icon_stats);
+    if (tex_icon_arrow_back) glDeleteTextures(1, &tex_icon_arrow_back);
     cleanup_font_engine();
     if (shader_program) glDeleteProgram(shader_program);
     if (ui_shader_program) glDeleteProgram(ui_shader_program);
@@ -332,6 +333,7 @@ bool ShaderRenderer::init_gl_shaders() {
     tex_icon_fullscreen_exit = create_icon_tex(ICON_FULLSCREEN_EXIT_RGBA, ICON_SIZE);
     tex_icon_indicator = create_icon_tex(ICON_INDICATOR_RGBA, ICON_SIZE);
     tex_icon_stats = create_icon_tex(ICON_STATS_RGBA, ICON_SIZE);
+    tex_icon_arrow_back = create_icon_tex(ICON_ARROW_BACK_RGBA, ICON_SIZE);
 
     init_font_engine();
 
@@ -873,20 +875,40 @@ bool ShaderRenderer::init_font_engine() {
     ft_library = ft;
 
     FT_Face face = nullptr;
-    FT_Error err = FT_New_Memory_Face(ft, EMBEDDED_FONT_GOOGLE_SANS, EMBEDDED_FONT_SIZE, 0, &face);
-    if (err) {
-        std::cerr << "[VMP Font] Failed to load embedded Google Sans font, error: " << err << std::endl;
-    } else {
-        ft_face = face;
-        FT_Select_Charmap(face, FT_ENCODING_UNICODE);
+    // Prefer native system desktop UI font (DejaVu Sans, Liberation, Ubuntu) for authentic crisp desktop typography
+    const char* preferred_system_fonts[] = {
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
+    };
+    for (const char* path : preferred_system_fonts) {
+        if (FT_New_Face(ft, path, 0, &face) == 0) {
+            ft_face = face;
+            FT_Select_Charmap(face, FT_ENCODING_UNICODE);
+            break;
+        }
+    }
+
+    // Fallback to embedded Google Sans font if system font is not available
+    if (!ft_face) {
+        FT_Error err = FT_New_Memory_Face(ft, EMBEDDED_FONT_GOOGLE_SANS, EMBEDDED_FONT_SIZE, 0, &face);
+        if (err) {
+            std::cerr << "[VMP Font] Failed to load embedded Google Sans font, error: " << err << std::endl;
+        } else {
+            ft_face = face;
+            FT_Select_Charmap(face, FT_ENCODING_UNICODE);
+        }
     }
 
     const char* fallback_paths[] = {
+        "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/TTF/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
         "/usr/share/fonts/truetype/freefont/FreeSans.ttf"
     };
     for (const char* path : fallback_paths) {
@@ -1004,7 +1026,7 @@ const ShaderRenderer::GlyphTexture* ShaderRenderer::get_glyph(uint32_t codepoint
     }
 
     FT_Set_Pixel_Sizes(selected_face, 0, static_cast<FT_UInt>(font_size));
-    if (FT_Load_Glyph(selected_face, glyph_idx, FT_LOAD_RENDER)) {
+    if (FT_Load_Glyph(selected_face, glyph_idx, FT_LOAD_RENDER | FT_LOAD_TARGET_LIGHT)) {
         return nullptr;
     }
 
@@ -1065,8 +1087,8 @@ void ShaderRenderer::draw_ui_text(const std::string& text, float x, float y, flo
     auto codepoints = process_text_to_codepoints(text);
     if (codepoints.empty()) return;
 
-    float baseline_y = y + static_cast<float>(sz) * 0.78f;
-    float cur_x = x;
+    float baseline_y = std::round(y + static_cast<float>(sz) * 0.82f);
+    float cur_x = std::round(x);
 
     glUseProgram(ui_shader_program);
     glUniform2f(glGetUniformLocation(ui_shader_program, "uScreenSize"), static_cast<float>(win_w), static_cast<float>(win_h));
@@ -1088,8 +1110,8 @@ void ShaderRenderer::draw_ui_text(const std::string& text, float x, float y, flo
         const GlyphTexture* gt = get_glyph(cp, sz);
         if (gt) {
             if (gt->texture && gt->width > 0 && gt->height > 0) {
-                float gx = cur_x + static_cast<float>(gt->bearing_x);
-                float gy = baseline_y - static_cast<float>(gt->bearing_y);
+                float gx = std::round(cur_x + static_cast<float>(gt->bearing_x));
+                float gy = std::round(baseline_y - static_cast<float>(gt->bearing_y));
                 float gw = static_cast<float>(gt->width);
                 float gh = static_cast<float>(gt->height);
 
@@ -1109,7 +1131,7 @@ void ShaderRenderer::draw_ui_text(const std::string& text, float x, float y, flo
             }
             cur_x += gt->advance;
         } else {
-            cur_x += font_size * 0.5f;
+            cur_x += std::round(static_cast<float>(sz) * 0.5f);
         }
     }
 
@@ -1136,7 +1158,7 @@ void ShaderRenderer::render_ui_overlay(int win_w, int win_h, double current_sec,
     if (!osd_notification.empty()) {
         float note_font_sz = 14.0f;
         float note_y = is_fullscreen ? 16.0f : 36.0f;
-        float note_x = 20.0f; // 20px from the left of the window
+        float note_x = 68.0f; // Shifted right so it NEVER overlaps with the top-left back button
 
         float note_w = get_text_width(osd_notification, note_font_sz);
 
@@ -1169,185 +1191,201 @@ void ShaderRenderer::render_ui_overlay(int win_w, int win_h, double current_sec,
                      1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
     }
 
-    if (ui_alpha <= 0.01f) return;
+    if (ui_alpha <= 0.005f && !show_stats) return;
 
-    float center_y = win_h - 40.0f;
-    float icon_size = 22.0f;
+    // 0.2. Render Top Navigation (Frameless Material Symbols BACK button & Info icon)
+    {
+        float back_btn_sz = 30.0f;
+        float back_btn_x = 20.0f;
+        float back_btn_y = is_fullscreen ? 16.0f : 36.0f;
 
-    // 1. Bottom Control Bar Icons (Far Left: Replay 5s, Play/Pause, Forward 5s)
-    float replay_x = 24.0f;
-    float play_x = 58.0f;
-    float forward_x = 92.0f;
-    float icon_y = center_y - (icon_size / 2.0f);
+        bool back_hover = (mouse_x >= back_btn_x - 6.0f && mouse_x <= back_btn_x + back_btn_sz + 6.0f &&
+                          mouse_y >= back_btn_y - 6.0f && mouse_y <= back_btn_y + back_btn_sz + 6.0f);
 
-    draw_ui_icon(tex_icon_replay5, replay_x, icon_y, icon_size, icon_size, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
-    GLuint play_pause_tex = is_paused ? tex_icon_play : tex_icon_pause;
-    draw_ui_icon(play_pause_tex, play_x, icon_y, icon_size, icon_size, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
-    draw_ui_icon(tex_icon_forward5, forward_x, icon_y, icon_size, icon_size, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
+        float back_alpha = back_hover ? 1.0f : ui_alpha;
+        if (back_alpha > 0.005f) {
+            if (back_hover) {
+                draw_ui_icon(tex_icon_arrow_back, back_btn_x, back_btn_y, back_btn_sz, back_btn_sz, 0.0f, 0.85f, 1.0f, 1.0f, back_alpha, win_w, win_h);
+            } else {
+                draw_ui_icon(tex_icon_arrow_back, back_btn_x, back_btn_y, back_btn_sz, back_btn_sz, 1.0f, 1.0f, 1.0f, 0.90f, back_alpha, win_w, win_h);
+            }
+        }
 
-    // 2. Time Display Badge (Next to Forward button)
+        // Statistics / Info Icon (Top Right)
+        float top_icon_sz = 24.0f;
+        float stats_x = win_w - top_icon_sz - 20.0f;
+        float stats_y = back_btn_y + (back_btn_sz - top_icon_sz) / 2.0f;
+        bool stats_hover = (mouse_x >= stats_x - 6.0f && mouse_x <= stats_x + top_icon_sz + 6.0f &&
+                            mouse_y >= stats_y - 6.0f && mouse_y <= stats_y + top_icon_sz + 6.0f);
+
+        float stats_cur_alpha = (show_stats || stats_hover) ? 1.0f : ui_alpha;
+        if (stats_cur_alpha > 0.005f) {
+            if (show_stats || stats_hover) {
+                draw_ui_icon(tex_icon_stats, stats_x, stats_y, top_icon_sz, top_icon_sz, 0.0f, 0.85f, 1.0f, 1.0f, stats_cur_alpha, win_w, win_h);
+            } else {
+                draw_ui_icon(tex_icon_stats, stats_x, stats_y, top_icon_sz, top_icon_sz, 1.0f, 1.0f, 1.0f, 0.85f, stats_cur_alpha, win_w, win_h);
+            }
+        }
+    }
+
     bool has_hours = (total_sec >= 3600.0);
-    std::string full_time = fmt_time_short(current_sec, has_hours) + " / " + fmt_time_short(total_sec, has_hours);
-    float time_x = forward_x + icon_size + 14.0f;
-    float time_y = center_y - 7.0f;
-    draw_ui_text(full_time, time_x, time_y, 14.0f, 0.9f, 0.95f, 1.0f, 0.95f, ui_alpha, win_w, win_h);
 
-    // Calculate progress bar start AFTER time display and end BEFORE fullscreen button
-    float time_text_w = get_text_width(full_time, 14.0f);
-    float bar_x = time_x + time_text_w + 15.0f;
-    float fs_x = win_w - 42.0f;
-    float fs_y = center_y - (icon_size / 2.0f);
-    float bar_w = (fs_x - 15.0f) - bar_x;
-    float bar_y = center_y;
+    if (ui_alpha > 0.005f) {
+        float center_y = win_h - 40.0f;
+        float icon_size = 26.0f;
 
-    bool is_hover = (mouse_x >= bar_x - 10.0f && mouse_x <= bar_x + bar_w + 10.0f &&
-                    mouse_y >= bar_y - 20.0f && mouse_y <= bar_y + 20.0f);
+        // 1. Bottom Control Bar Icons (Far Left: Replay 5s, Play/Pause, Forward 5s)
+        float replay_x = 24.0f;
+        float play_x = 62.0f;
+        float forward_x = 100.0f;
+        float icon_y = center_y - (icon_size / 2.0f);
 
-    float bar_h = (is_hover || is_scrubbing) ? 8.0f : 5.0f;
-    float bar_pos_y = bar_y - (bar_h / 2.0f);
-    float track_radius = bar_h / 2.0f;
+        draw_ui_icon(tex_icon_replay5, replay_x, icon_y, icon_size, icon_size, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
+        GLuint play_pause_tex = is_paused ? tex_icon_play : tex_icon_pause;
+        draw_ui_icon(play_pause_tex, play_x, icon_y, icon_size, icon_size, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
+        draw_ui_icon(tex_icon_forward5, forward_x, icon_y, icon_size, icon_size, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
 
-    // 3. Progress Bar Track (Capsule rounded ends)
-    draw_ui_rounded_rect(bar_x, bar_pos_y, bar_w, bar_h, track_radius, 1.0f, 1.0f, 1.0f, 0.25f, ui_alpha, win_w, win_h);
+        // 2. Time Display Badge (Next to Forward button)
+        std::string full_time = fmt_time_short(current_sec, has_hours) + " / " + fmt_time_short(total_sec, has_hours);
+        float time_x = forward_x + icon_size + 14.0f;
+        float time_y = center_y - 7.0f;
+        draw_ui_text(full_time, time_x, time_y, 14.0f, 0.9f, 0.95f, 1.0f, 0.95f, ui_alpha, win_w, win_h);
 
-    // 4. Progress Bar Fill (Vibrant Cyan / Electric Blue Capsule)
-    double progress_ratio = (total_sec > 0.0) ? std::max(0.0, std::min(1.0, current_sec / total_sec)) : 0.0;
-    float fill_w = static_cast<float>(bar_w * progress_ratio);
-    if (fill_w > 0.0f) {
-        float fill_radius = std::min(track_radius, fill_w / 2.0f);
-        draw_ui_rounded_rect(bar_x, bar_pos_y, fill_w, bar_h, fill_radius, 0.0f, 0.85f, 1.0f, 0.95f, ui_alpha, win_w, win_h);
-    }
+        // Calculate progress bar start AFTER time display and end BEFORE fullscreen button
+        float time_text_w = get_text_width(full_time, 14.0f);
+        float bar_x = time_x + time_text_w + 15.0f;
+        float fs_x = win_w - 42.0f;
+        float fs_y = center_y - (icon_size / 2.0f);
+        float bar_w = (fs_x - 15.0f) - bar_x;
+        float bar_y = center_y;
 
-    // 5. Playback Knob (Glowing Circular Handle)
-    float knob_radius = (is_hover || is_scrubbing) ? 9.0f : 7.0f;
-    float knob_cx = bar_x + fill_w;
-    float knob_cy = bar_y;
+        bool is_hover = (mouse_x >= bar_x - 10.0f && mouse_x <= bar_x + bar_w + 10.0f &&
+                        mouse_y >= bar_y - 20.0f && mouse_y <= bar_y + 20.0f);
 
-    // Glowing outer halo circle
-    draw_ui_circle(knob_cx, knob_cy, knob_radius + 4.0f, 0.0f, 0.85f, 1.0f, 0.35f, ui_alpha, win_w, win_h);
-    // Solid white circle handle
-    draw_ui_circle(knob_cx, knob_cy, knob_radius, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
-    // Inner vibrant cyan dot
-    draw_ui_circle(knob_cx, knob_cy, knob_radius * 0.45f, 0.0f, 0.85f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
+        float bar_h = (is_hover || is_scrubbing) ? 8.0f : 5.0f;
+        float bar_pos_y = bar_y - (bar_h / 2.0f);
+        float track_radius = bar_h / 2.0f;
 
-    // 7. Hover Guide & Timestamp Tooltip Box (with optional Video Thumbnail Preview)
-    if ((is_hover || is_scrubbing) && total_sec > 0.0) {
-        double hover_ratio = std::max(0.0, std::min(1.0, (mouse_x - bar_x) / bar_w));
-        double hover_sec = hover_ratio * total_sec;
-        float h_x = bar_x + static_cast<float>(bar_w * hover_ratio);
+        // 3. Progress Bar Track (Capsule rounded ends)
+        draw_ui_rounded_rect(bar_x, bar_pos_y, bar_w, bar_h, track_radius, 1.0f, 1.0f, 1.0f, 0.25f, ui_alpha, win_w, win_h);
 
-        // Hover Vertical Guide line
-        draw_ui_rect(h_x - 1.0f, bar_pos_y - 4.0f, 2.0f, bar_h + 8.0f, 1.0f, 1.0f, 1.0f, 0.5f, ui_alpha, win_w, win_h);
-
-        std::string time_tip = fmt_time_short(hover_sec, has_hours);
-        float pill_w = has_hours ? 84.0f : 64.0f;
-        float pill_h = 24.0f;
-        float pill_rad = pill_h / 2.0f;
-
-        if (has_thumbnail_texture && thumbnail_texture != 0) {
-            float tw = 160.0f;
-            float th = 90.0f;
-            float tx = std::max(bar_x, std::min(bar_x + bar_w - tw, h_x - (tw / 2.0f)));
-            float ty = bar_pos_y - (th + 38.0f);
-
-            // Semi-translucent dark background with uniform rounded border
-            draw_ui_rounded_rect(tx - 3.0f, ty - 3.0f, tw + 6.0f, th + 6.0f, 6.0f, 0.0f, 0.85f, 1.0f, 0.30f, ui_alpha, win_w, win_h);
-            draw_ui_rounded_rect(tx - 2.0f, ty - 2.0f, tw + 4.0f, th + 4.0f, 5.0f, 0.03f, 0.06f, 0.12f, 0.95f, ui_alpha, win_w, win_h);
-
-            // Thumbnail Image
-            draw_ui_icon(thumbnail_texture, tx, ty, tw, th, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
-
-            // Hover timestamp capsule below thumbnail image
-            float pill_x = tx + (tw - pill_w) / 2.0f;
-            float pill_y = ty + th + 4.0f;
-
-            draw_ui_rounded_rect(pill_x, pill_y, pill_w, pill_h, pill_rad, 0.05f, 0.08f, 0.16f, 0.95f, ui_alpha, win_w, win_h);
-            draw_ui_string(time_tip, pill_x + 8.0f, pill_y + 4.0f, 11.0f, 14.0f, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
-        } else {
-            // Standard floating timestamp tooltip capsule
-            float pill_x = std::max(bar_x, std::min(bar_x + bar_w - pill_w, h_x - (pill_w / 2.0f)));
-            float pill_y = bar_pos_y - 42.0f;
-
-            draw_ui_rounded_rect(pill_x, pill_y, pill_w, pill_h, pill_rad, 0.05f, 0.08f, 0.16f, 0.95f, ui_alpha, win_w, win_h);
-            draw_ui_string(time_tip, pill_x + 8.0f, pill_y + 4.0f, 11.0f, 14.0f, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
-        }
-    }
-
-    // 8. Fullscreen Icon (Bottom Right)
-    GLuint fs_tex = is_fullscreen ? tex_icon_fullscreen_exit : tex_icon_fullscreen;
-    draw_ui_icon(fs_tex, fs_x, fs_y, icon_size, icon_size, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
-
-    // 9. Top-Right "BACK" Button & Stats (Render ONLY in windowed mode, 100% clean in fullscreen like VLC)
-    if (!is_fullscreen) {
-        float back_btn_w = 110.0f;
-        float back_btn_h = 32.0f;
-        float back_btn_x = win_w - back_btn_w - 20.0f;
-        float back_btn_y = 36.0f;
-
-        bool back_hover = (mouse_x >= back_btn_x && mouse_x <= back_btn_x + back_btn_w &&
-                          mouse_y >= back_btn_y && mouse_y <= back_btn_y + back_btn_h);
-
-        if (back_hover) {
-            draw_ui_rounded_rect(back_btn_x, back_btn_y, back_btn_w, back_btn_h, 16.0f, 0.0f, 0.85f, 1.0f, 0.90f, ui_alpha, win_w, win_h);
-            draw_ui_string("< BACK", back_btn_x + 22.0f, back_btn_y + 8.0f, 10.0f, 14.0f, 0.02f, 0.05f, 0.10f, 1.0f, ui_alpha, win_w, win_h);
-        } else {
-            draw_ui_rounded_rect(back_btn_x, back_btn_y, back_btn_w, back_btn_h, 16.0f, 0.0f, 0.40f, 0.70f, 0.45f, ui_alpha, win_w, win_h);
-            draw_ui_string("< BACK", back_btn_x + 22.0f, back_btn_y + 8.0f, 10.0f, 14.0f, 1.0f, 1.0f, 1.0f, 0.95f, ui_alpha, win_w, win_h);
+        // 4. Progress Bar Fill (Vibrant Cyan / Electric Blue Capsule)
+        double progress_ratio = (total_sec > 0.0) ? std::max(0.0, std::min(1.0, current_sec / total_sec)) : 0.0;
+        float fill_w = static_cast<float>(bar_w * progress_ratio);
+        if (fill_w > 0.0f) {
+            float fill_radius = std::min(track_radius, fill_w / 2.0f);
+            draw_ui_rounded_rect(bar_x, bar_pos_y, fill_w, bar_h, fill_radius, 0.0f, 0.85f, 1.0f, 0.95f, ui_alpha, win_w, win_h);
         }
 
-        // 10. Statistics Icon (Top Right, to the left of BACK button)
-        float stats_x = back_btn_x - 38.0f;
-        float stats_y = back_btn_y + 5.0f;
+        // 5. Playback Knob (Glowing Circular Handle)
+        float knob_radius = (is_hover || is_scrubbing) ? 9.0f : 7.0f;
+        float knob_cx = bar_x + fill_w;
+        float knob_cy = bar_y;
 
-        if (show_stats) {
-            draw_ui_icon(tex_icon_stats, stats_x, stats_y, icon_size, icon_size, 0.0f, 0.85f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
-        } else {
-            draw_ui_icon(tex_icon_stats, stats_x, stats_y, icon_size, icon_size, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
+        // Glowing outer halo circle
+        draw_ui_circle(knob_cx, knob_cy, knob_radius + 4.0f, 0.0f, 0.85f, 1.0f, 0.35f, ui_alpha, win_w, win_h);
+        // Solid white circle handle
+        draw_ui_circle(knob_cx, knob_cy, knob_radius, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
+        // Inner vibrant cyan dot
+        draw_ui_circle(knob_cx, knob_cy, knob_radius * 0.45f, 0.0f, 0.85f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
+
+        // 7. Hover Guide & Timestamp Tooltip Box (with optional Video Thumbnail Preview)
+        if ((is_hover || is_scrubbing) && total_sec > 0.0) {
+            double hover_ratio = std::max(0.0, std::min(1.0, (mouse_x - bar_x) / bar_w));
+            double hover_sec = hover_ratio * total_sec;
+            float h_x = bar_x + static_cast<float>(bar_w * hover_ratio);
+
+            // Hover Vertical Guide line
+            draw_ui_rect(h_x - 1.0f, bar_pos_y - 4.0f, 2.0f, bar_h + 8.0f, 1.0f, 1.0f, 1.0f, 0.5f, ui_alpha, win_w, win_h);
+
+            std::string time_tip = fmt_time_short(hover_sec, has_hours);
+            float pill_w = has_hours ? 84.0f : 64.0f;
+            float pill_h = 24.0f;
+            float pill_rad = pill_h / 2.0f;
+
+            if (has_thumbnail_texture && thumbnail_texture != 0) {
+                float tw = 160.0f;
+                float th = 90.0f;
+                float tx = std::max(bar_x, std::min(bar_x + bar_w - tw, h_x - (tw / 2.0f)));
+                float ty = bar_pos_y - (th + 38.0f);
+
+                // Semi-translucent dark background with uniform rounded border
+                draw_ui_rounded_rect(tx - 3.0f, ty - 3.0f, tw + 6.0f, th + 6.0f, 6.0f, 0.0f, 0.85f, 1.0f, 0.30f, ui_alpha, win_w, win_h);
+                draw_ui_rounded_rect(tx - 2.0f, ty - 2.0f, tw + 4.0f, th + 4.0f, 5.0f, 0.03f, 0.06f, 0.12f, 0.95f, ui_alpha, win_w, win_h);
+
+                // Thumbnail Image
+                draw_ui_icon(thumbnail_texture, tx, ty, tw, th, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
+
+                // Hover timestamp capsule below thumbnail image
+                float pill_x = tx + (tw - pill_w) / 2.0f;
+                float pill_y = ty + th + 4.0f;
+
+                draw_ui_rounded_rect(pill_x, pill_y, pill_w, pill_h, pill_rad, 0.05f, 0.08f, 0.16f, 0.95f, ui_alpha, win_w, win_h);
+                draw_ui_string(time_tip, pill_x + 8.0f, pill_y + 4.0f, 11.0f, 14.0f, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
+            } else {
+                // Standard floating timestamp tooltip capsule
+                float pill_x = std::max(bar_x, std::min(bar_x + bar_w - pill_w, h_x - (pill_w / 2.0f)));
+                float pill_y = bar_pos_y - 42.0f;
+
+                draw_ui_rounded_rect(pill_x, pill_y, pill_w, pill_h, pill_rad, 0.05f, 0.08f, 0.16f, 0.95f, ui_alpha, win_w, win_h);
+                draw_ui_string(time_tip, pill_x + 8.0f, pill_y + 4.0f, 11.0f, 14.0f, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
+            }
         }
-    }
 
-    // 10. Center Screen Pause Badge Overlay
-    if (is_paused) {
-        float center_sz = 48.0f;
-        float center_x = (win_w - center_sz) / 2.0f;
-        float center_y_screen = (win_h - center_sz) / 2.0f;
-        draw_ui_icon(tex_icon_pause, center_x, center_y_screen, center_sz, center_sz, 1.0f, 1.0f, 1.0f, 0.95f, ui_alpha, win_w, win_h);
+        // 8. Fullscreen Icon (Bottom Right)
+        GLuint fs_tex = is_fullscreen ? tex_icon_fullscreen_exit : tex_icon_fullscreen;
+        bool fs_hover = (mouse_x >= fs_x - 6.0f && mouse_x <= fs_x + icon_size + 6.0f &&
+                         mouse_y >= fs_y - 6.0f && mouse_y <= fs_y + icon_size + 6.0f);
+        if (fs_hover) {
+            draw_ui_icon(fs_tex, fs_x, fs_y, icon_size, icon_size, 0.0f, 0.85f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
+        } else {
+            draw_ui_icon(fs_tex, fs_x, fs_y, icon_size, icon_size, 1.0f, 1.0f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
+        }
+
+        // 10. Center Screen Pause Badge Overlay
+        if (is_paused) {
+            float center_sz = 48.0f;
+            float center_x = (win_w - center_sz) / 2.0f;
+            float center_y_screen = (win_h - center_sz) / 2.0f;
+            draw_ui_icon(tex_icon_pause, center_x, center_y_screen, center_sz, center_sz, 1.0f, 1.0f, 1.0f, 0.95f, ui_alpha, win_w, win_h);
+        }
     }
 
     // 11. Statistics Info Popup Window (Top Right below details/stats icon)
     if (show_stats) {
+        float pop_alpha = 1.0f;
         float pop_w = 420.0f;
         float pop_h = 240.0f;
         float pop_x = std::max(20.0f, win_w - pop_w - 20.0f);
-        float pop_y = is_fullscreen ? 20.0f : (36.0f + 5.0f + icon_size + 10.0f);
+        float pop_y = (is_fullscreen ? 16.0f : 36.0f) + 34.0f + 10.0f;
 
         // Uniform 1px subtle glass/cyan border around the entire rounded card
-        draw_ui_rounded_rect(pop_x, pop_y, pop_w, pop_h, 8.0f, 0.0f, 0.85f, 1.0f, 0.30f, ui_alpha, win_w, win_h);
+        draw_ui_rounded_rect(pop_x, pop_y, pop_w, pop_h, 8.0f, 0.0f, 0.85f, 1.0f, 0.30f, pop_alpha, win_w, win_h);
 
         // Dark translucent card inner fill
-        draw_ui_rounded_rect(pop_x + 1.0f, pop_y + 1.0f, pop_w - 2.0f, pop_h - 2.0f, 7.0f, 0.04f, 0.07f, 0.14f, 0.94f, ui_alpha, win_w, win_h);
+        draw_ui_rounded_rect(pop_x + 1.0f, pop_y + 1.0f, pop_w - 2.0f, pop_h - 2.0f, 7.0f, 0.04f, 0.07f, 0.14f, 0.94f, pop_alpha, win_w, win_h);
 
         // Text content
         float text_x = pop_x + 15.0f;
         float text_y = pop_y + 15.0f;
         float line_h = 18.0f;
 
-        draw_ui_string("VIDEO TELEMETRY & STATS", text_x, text_y, 11.0f, 14.0f, 0.0f, 0.85f, 1.0f, 1.0f, ui_alpha, win_w, win_h);
+        draw_ui_string("VIDEO TELEMETRY & STATS", text_x, text_y, 11.0f, 14.0f, 0.0f, 0.85f, 1.0f, 1.0f, pop_alpha, win_w, win_h);
         text_y += line_h + 5.0f;
 
-        draw_ui_string("File: " + video_name, text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, ui_alpha, win_w, win_h); text_y += line_h;
-        draw_ui_string("Size: " + video_size, text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, ui_alpha, win_w, win_h); text_y += line_h;
-        draw_ui_string("Date: " + video_date, text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, ui_alpha, win_w, win_h); text_y += line_h;
-        draw_ui_string("Resolution: " + video_resolution, text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, ui_alpha, win_w, win_h); text_y += line_h;
-        draw_ui_string("Codec: " + codec_name, text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, ui_alpha, win_w, win_h); text_y += line_h;
-        draw_ui_string("FPS: " + std::to_string(static_cast<int>(fps)), text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, ui_alpha, win_w, win_h); text_y += line_h;
-        draw_ui_string("HW Accel: " + hw_status, text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, ui_alpha, win_w, win_h); text_y += line_h;
+        draw_ui_string("File: " + video_name, text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, pop_alpha, win_w, win_h); text_y += line_h;
+        draw_ui_string("Size: " + video_size, text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, pop_alpha, win_w, win_h); text_y += line_h;
+        draw_ui_string("Date: " + video_date, text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, pop_alpha, win_w, win_h); text_y += line_h;
+        draw_ui_string("Resolution: " + video_resolution, text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, pop_alpha, win_w, win_h); text_y += line_h;
+        draw_ui_string("Codec: " + codec_name, text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, pop_alpha, win_w, win_h); text_y += line_h;
+        draw_ui_string("FPS: " + std::to_string(static_cast<int>(fps)), text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, pop_alpha, win_w, win_h); text_y += line_h;
+        draw_ui_string("HW Accel: " + hw_status, text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, pop_alpha, win_w, win_h); text_y += line_h;
         std::string cas_str = sharpness_enabled ? "ENABLED (0.65)" : "DISABLED";
-        draw_ui_string("CAS Clarity: " + cas_str, text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, ui_alpha, win_w, win_h); text_y += line_h;
-        draw_ui_string("Aspect Ratio: " + get_aspect_ratio_name(), text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, ui_alpha, win_w, win_h); text_y += line_h;
+        draw_ui_string("CAS Clarity: " + cas_str, text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, pop_alpha, win_w, win_h); text_y += line_h;
+        draw_ui_string("Aspect Ratio: " + get_aspect_ratio_name(), text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, pop_alpha, win_w, win_h); text_y += line_h;
         
         std::string time_str = fmt_time_short(current_sec, has_hours) + " / " + fmt_time_short(total_sec, has_hours);
-        draw_ui_string("Playback: " + time_str, text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, ui_alpha, win_w, win_h);
+        draw_ui_string("Playback: " + time_str, text_x, text_y, 10.0f, 13.0f, 1.0f, 1.0f, 1.0f, 0.9f, pop_alpha, win_w, win_h);
     }
 }
 
@@ -1517,9 +1555,14 @@ void ShaderRenderer::render_folder_gallery(int win_w, int win_h, double mouse_x,
     draw_ui_rect(0, header_y + header_h - 1.0f, win_w, 1.0f, 0.0f, 0.85f, 1.0f, 0.35f, 1.0f, win_w, win_h);
 
     // Folder Name Title
-    std::string folder_display = "FOLDER: " + folder_path;
-    if (folder_display.length() > 38) {
-        folder_display = "FOLDER: ..." + folder_path.substr(folder_path.length() - 32);
+    std::string folder_display = "";
+    if (folder_path == "ALL_VIDEOS" || folder_path.empty()) {
+        folder_display = "ALL VIDEOS (Kali Linux Library)";
+    } else {
+        folder_display = "FOLDER: " + folder_path;
+        if (folder_display.length() > 38) {
+            folder_display = "FOLDER: ..." + folder_path.substr(folder_path.length() - 32);
+        }
     }
     std::string count_str = " (" + std::to_string(items.size()) + " Videos)";
     draw_ui_text(folder_display + count_str, 24.0f, header_y + 18.0f, 15.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
@@ -1562,7 +1605,7 @@ void ShaderRenderer::render_folder_gallery(int win_w, int win_h, double mouse_x,
     int num_cols = std::max(2, std::min(6, static_cast<int>((avail_w + gap_x) / 240.0f)));
     float card_w = (avail_w - (num_cols - 1) * gap_x) / num_cols;
     float thumb_h = card_w * (9.0f / 16.0f); // 16:9 thumbnail aspect ratio
-    float text_h = 44.0f;
+    float text_h = 56.0f;
     float card_h = thumb_h + text_h;
 
     int num_rows = (static_cast<int>(items.size()) + num_cols - 1) / num_cols;
@@ -1643,9 +1686,22 @@ void ShaderRenderer::render_folder_gallery(int win_w, int win_h, double mouse_x,
             draw_ui_text(fname, card_x + 8.0f, title_y, 13.5f, 1.0f, 1.0f, 1.0f, 0.95f, 1.0f, win_w, win_h);
         }
 
-        // Subtitle text (Size & Format)
-        std::string sub_info = items[i].size_str;
-        draw_ui_text(sub_info, card_x + 8.0f, title_y + 20.0f, 11.0f, 0.60f, 0.70f, 0.80f, 0.75f, 1.0f, win_w, win_h);
+        // Subtitle text (Folder attribution & Size)
+        float avail_sub_w = card_w - 16.0f;
+        std::string folder_lbl = items[i].folder_name.empty() ? "" : ("From Folder: " + items[i].folder_name);
+        if (!folder_lbl.empty()) {
+            std::string disp_folder = folder_lbl;
+            if (get_text_width(disp_folder, 11.0f) > avail_sub_w && disp_folder.length() > 10) {
+                while (disp_folder.length() > 8 && get_text_width(disp_folder + "...", 11.0f) > avail_sub_w) {
+                    disp_folder.pop_back();
+                }
+                disp_folder += "...";
+            }
+            draw_ui_text(disp_folder, card_x + 8.0f, title_y + 19.0f, 11.0f, 0.0f, 0.85f, 1.0f, 0.95f, 1.0f, win_w, win_h);
+            draw_ui_text(items[i].size_str, card_x + 8.0f, title_y + 35.0f, 10.5f, 0.60f, 0.70f, 0.80f, 0.75f, 1.0f, win_w, win_h);
+        } else {
+            draw_ui_text(items[i].size_str, card_x + 8.0f, title_y + 20.0f, 11.0f, 0.60f, 0.70f, 0.80f, 0.75f, 1.0f, win_w, win_h);
+        }
     }
 }
 
@@ -1714,41 +1770,48 @@ void ShaderRenderer::init_vlc_menus() {
 
 void ShaderRenderer::render_vlc_menu_bar(int win_w, int win_h, double mouse_x, double mouse_y,
                                          int active_menu_idx, float menu_alpha) {
-    (void)mouse_x;
-    (void)mouse_y;
     if (win_w <= 0 || win_h <= 0 || menu_alpha <= 0.01f) return;
     init_vlc_menus();
 
     float menu_h = 26.0f;
-    float font_sz = 12.5f;
+    float font_sz = 13.0f;
 
     // VLC Menu Bar dark background (#21232a)
     draw_ui_rect(0, 0, static_cast<float>(win_w), menu_h, 0.13f, 0.14f, 0.17f, 1.0f, menu_alpha, win_w, win_h);
     // Subtle 1px bottom border line (#18191f)
     draw_ui_rect(0, menu_h - 1.0f, static_cast<float>(win_w), 1.0f, 0.09f, 0.10f, 0.12f, 1.0f, menu_alpha, win_w, win_h);
 
+    float text_y = 5.0f;
     float cur_x = 8.0f;
     for (size_t i = 0; i < vlc_menus.size(); ++i) {
         auto& cat = vlc_menus[i];
         float text_w = get_text_width(cat.title, font_sz);
         cat.x = cur_x;
-        cat.width = text_w + 14.0f;
+        cat.width = std::round(text_w + 16.0f);
 
         bool is_active = (static_cast<int>(i) == active_menu_idx);
+        bool is_hovered = (mouse_x >= cat.x && mouse_x < cat.x + cat.width &&
+                           mouse_y >= 0.0 && mouse_y < menu_h);
 
         if (is_active) {
             // VLC active menu item highlight (when clicked / open)
             draw_ui_rounded_rect(cat.x, 2.0f, cat.width, menu_h - 4.0f, 3.0f, 
-                                 0.0f, 0.45f, 0.85f, 0.50f, menu_alpha, win_w, win_h);
-            draw_ui_text(cat.title, cat.x + 7.0f, 4.5f, font_sz, 
+                                 0.0f, 0.45f, 0.85f, 0.65f, menu_alpha, win_w, win_h);
+            draw_ui_text(cat.title, cat.x + 8.0f, text_y, font_sz, 
+                         1.0f, 1.0f, 1.0f, 1.0f, menu_alpha, win_w, win_h);
+        } else if (is_hovered) {
+            // Interactive hover highlight like real native desktop menus
+            draw_ui_rounded_rect(cat.x, 2.0f, cat.width, menu_h - 4.0f, 3.0f, 
+                                 1.0f, 1.0f, 1.0f, 0.12f, menu_alpha, win_w, win_h);
+            draw_ui_text(cat.title, cat.x + 8.0f, text_y, font_sz, 
                          1.0f, 1.0f, 1.0f, 1.0f, menu_alpha, win_w, win_h);
         } else {
-            // Normal state: No halo or box on hover, purely clean like VLC
-            draw_ui_text(cat.title, cat.x + 7.0f, 4.5f, font_sz, 
-                         0.90f, 0.92f, 0.94f, 0.95f, menu_alpha, win_w, win_h);
+            // Normal state: clean, high-contrast readable text
+            draw_ui_text(cat.title, cat.x + 8.0f, text_y, font_sz, 
+                         0.92f, 0.94f, 0.96f, 0.95f, menu_alpha, win_w, win_h);
         }
 
-        cur_x += cat.width + 2.0f;
+        cur_x += cat.width + 1.0f;
     }
 }
 
@@ -1788,18 +1851,18 @@ void ShaderRenderer::render_vlc_dropdown(int win_w, int win_h, double mouse_x, d
         if (it_hover) {
             draw_ui_rounded_rect(drop_x + 2.0f, it_y, card_w - 4.0f, item_h, 3.0f, 
                                  0.0f, 0.42f, 0.80f, 0.75f, 1.0f, win_w, win_h);
-            draw_ui_text(item.label, drop_x + 12.0f, it_y + 5.0f, 12.0f, 
+            draw_ui_text(item.label, drop_x + 12.0f, it_y + 5.0f, 13.0f, 
                          1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
         } else {
-            draw_ui_text(item.label, drop_x + 12.0f, it_y + 5.0f, 12.0f, 
-                         0.90f, 0.92f, 0.95f, 0.95f, 1.0f, win_w, win_h);
+            draw_ui_text(item.label, drop_x + 12.0f, it_y + 5.0f, 13.0f, 
+                         0.92f, 0.94f, 0.96f, 0.95f, 1.0f, win_w, win_h);
         }
 
         if (!item.shortcut.empty()) {
-            float sc_w = get_text_width(item.shortcut, 11.0f);
+            float sc_w = get_text_width(item.shortcut, 12.0f);
             float sc_x = drop_x + card_w - sc_w - 12.0f;
-            draw_ui_text(item.shortcut, sc_x, it_y + 6.0f, 11.0f, 
-                         0.55f, 0.62f, 0.72f, 0.85f, 1.0f, win_w, win_h);
+            draw_ui_text(item.shortcut, sc_x, it_y + 5.0f, 12.0f, 
+                         0.60f, 0.66f, 0.75f, 0.90f, 1.0f, win_w, win_h);
         }
     }
 }
@@ -1898,15 +1961,15 @@ void ShaderRenderer::render_vlc_context_menu(int win_w, int win_h, double mouse_
         if (it_hover || is_sub_active) {
             draw_ui_rounded_rect(root_x + 2.0f, it_y, card_w - 4.0f, item_h, 3.0f,
                                  0.0f, 0.42f, 0.80f, 0.75f, 1.0f, win_w, win_h);
-            draw_ui_text(vlc_menus[i].title, root_x + 12.0f, it_y + 5.0f, 12.0f,
+            draw_ui_text(vlc_menus[i].title, root_x + 12.0f, it_y + 5.0f, 13.0f,
                          1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
-            draw_ui_text(">", root_x + card_w - 16.0f, it_y + 5.0f, 12.0f,
+            draw_ui_text(">", root_x + card_w - 16.0f, it_y + 5.0f, 13.0f,
                          1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
         } else {
-            draw_ui_text(vlc_menus[i].title, root_x + 12.0f, it_y + 5.0f, 12.0f,
-                         0.90f, 0.92f, 0.95f, 0.95f, 1.0f, win_w, win_h);
-            draw_ui_text(">", root_x + card_w - 16.0f, it_y + 5.0f, 12.0f,
-                         0.55f, 0.62f, 0.72f, 0.85f, 1.0f, win_w, win_h);
+            draw_ui_text(vlc_menus[i].title, root_x + 12.0f, it_y + 5.0f, 13.0f,
+                         0.92f, 0.94f, 0.96f, 0.95f, 1.0f, win_w, win_h);
+            draw_ui_text(">", root_x + card_w - 16.0f, it_y + 5.0f, 13.0f,
+                         0.60f, 0.66f, 0.75f, 0.85f, 1.0f, win_w, win_h);
         }
     }
 
@@ -1976,3 +2039,186 @@ bool ShaderRenderer::is_mouse_inside_context_menu(int win_w, int win_h, double m
 
     return false;
 }
+
+void ShaderRenderer::render_about_dialog(int win_w, int win_h, double mouse_x, double mouse_y) {
+    if (win_w <= 0 || win_h <= 0) return;
+
+    // Translucent dark backdrop overlay
+    draw_ui_rect(0.0f, 0.0f, static_cast<float>(win_w), static_cast<float>(win_h), 0.0f, 0.0f, 0.0f, 0.72f, 1.0f, win_w, win_h);
+
+    float card_w = std::min(static_cast<float>(win_w) - 30.0f, 600.0f);
+    float card_h = std::min(static_cast<float>(win_h) - 30.0f, 386.0f);
+    float card_x = (static_cast<float>(win_w) - card_w) / 2.0f;
+    float card_y = (static_cast<float>(win_h) - card_h) / 2.0f;
+
+    // Card outer border & main card body
+    draw_ui_rounded_rect(card_x - 1.5f, card_y - 1.5f, card_w + 3.0f, card_h + 3.0f, 13.0f, 0.0f, 0.75f, 1.0f, 0.40f, 1.0f, win_w, win_h);
+    draw_ui_rounded_rect(card_x, card_y, card_w, card_h, 12.0f, 0.08f, 0.10f, 0.14f, 0.98f, 1.0f, win_w, win_h);
+
+    // Header bar (38px height)
+    draw_ui_rounded_rect(card_x, card_y, card_w, 38.0f, 12.0f, 0.13f, 0.16f, 0.22f, 0.98f, 1.0f, win_w, win_h);
+    draw_ui_rect(card_x, card_y + 26.0f, card_w, 12.0f, 0.13f, 0.16f, 0.22f, 0.98f, 1.0f, win_w, win_h);
+    draw_ui_rect(card_x, card_y + 38.0f, card_w, 1.0f, 0.20f, 0.25f, 0.35f, 0.85f, 1.0f, win_w, win_h);
+
+    // Header Title & cyan indicator dot
+    draw_ui_circle(card_x + 20.0f, card_y + 19.0f, 3.5f, 0.0f, 0.85f, 1.0f, 1.0f, 1.0f, win_w, win_h);
+    draw_ui_text("About VMP", card_x + 32.0f, card_y + 11.0f, 14.0f, 0.95f, 0.96f, 0.98f, 1.0f, 1.0f, win_w, win_h);
+
+    // Close button [X] at top-right
+    float close_sz = 24.0f;
+    float close_x = card_x + card_w - close_sz - 8.0f;
+    float close_y = card_y + 7.0f;
+    bool close_hover = (mouse_x >= close_x && mouse_x <= close_x + close_sz && mouse_y >= close_y && mouse_y <= close_y + close_sz);
+    if (close_hover) {
+        draw_ui_rounded_rect(close_x, close_y, close_sz, close_sz, 5.0f, 0.85f, 0.22f, 0.28f, 0.90f, 1.0f, win_w, win_h);
+        float x_w = get_text_width("X", 11.0f);
+        draw_ui_text("X", close_x + (close_sz - x_w) / 2.0f, close_y + 6.0f, 11.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
+    } else {
+        draw_ui_rounded_rect(close_x, close_y, close_sz, close_sz, 5.0f, 0.20f, 0.24f, 0.32f, 0.60f, 1.0f, win_w, win_h);
+        float x_w = get_text_width("X", 11.0f);
+        draw_ui_text("X", close_x + (close_sz - x_w) / 2.0f, close_y + 6.0f, 11.0f, 0.70f, 0.75f, 0.85f, 0.90f, 1.0f, win_w, win_h);
+    }
+
+    // Logo & Header area
+    float hero_y = card_y + 50.0f;
+    float logo_sz = 44.0f;
+    float logo_x = card_x + 24.0f;
+    draw_ui_circle(logo_x + logo_sz / 2.0f, hero_y + logo_sz / 2.0f, 25.0f, 0.0f, 0.65f, 0.95f, 0.20f, 1.0f, win_w, win_h);
+    if (tex_icon_play) {
+        draw_ui_icon(tex_icon_play, logo_x + 2.0f, hero_y + 2.0f, logo_sz - 4.0f, logo_sz - 4.0f, 0.0f, 0.85f, 1.0f, 1.0f, 1.0f, win_w, win_h);
+    }
+
+    float hero_tx = logo_x + logo_sz + 16.0f;
+    draw_ui_text("VMP - Video Max Player", hero_tx, hero_y, 18.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
+
+    float badge_y = hero_y + 24.0f;
+    draw_ui_rounded_rect(hero_tx, badge_y, 88.0f, 18.0f, 4.0f, 0.0f, 0.65f, 0.95f, 0.25f, 1.0f, win_w, win_h);
+    draw_ui_text("v0.0.2-beta", hero_tx + 8.0f, badge_y + 2.0f, 11.0f, 0.0f, 0.88f, 1.0f, 1.0f, 1.0f, win_w, win_h);
+    draw_ui_text("Linux C++20 High-Performance Engine", hero_tx + 98.0f, badge_y + 2.0f, 11.5f, 0.60f, 0.70f, 0.80f, 0.90f, 1.0f, win_w, win_h);
+
+    // Separator line
+    draw_ui_rect(card_x + 24.0f, card_y + 110.0f, card_w - 48.0f, 1.0f, 0.16f, 0.20f, 0.28f, 0.80f, 1.0f, win_w, win_h);
+
+    // Metadata rows
+    float label_x = card_x + 24.0f;
+    float val_x = card_x + 115.0f;
+    float row_start_y = card_y + 122.0f;
+    float row_gap = 25.0f;
+
+    // Row 0: Developer
+    draw_ui_text("Developer:", label_x, row_start_y, 12.5f, 0.55f, 0.65f, 0.78f, 1.0f, 1.0f, win_w, win_h);
+    draw_ui_text("Hamza Bellouch (@hamzabellouch)", val_x, row_start_y, 12.5f, 0.95f, 0.96f, 0.98f, 1.0f, 1.0f, win_w, win_h);
+
+    // Row 1: Contact
+    draw_ui_text("Contact:", label_x, row_start_y + row_gap, 12.5f, 0.55f, 0.65f, 0.78f, 1.0f, 1.0f, win_w, win_h);
+    draw_ui_text("hamzabellouchcontact@gmail.com", val_x, row_start_y + row_gap, 12.5f, 0.95f, 0.96f, 0.98f, 1.0f, 1.0f, win_w, win_h);
+
+    // Row 2: GitHub
+    draw_ui_text("GitHub:", label_x, row_start_y + row_gap * 2, 12.5f, 0.55f, 0.65f, 0.78f, 1.0f, 1.0f, win_w, win_h);
+    draw_ui_text("https://github.com/hamzabellouch/vmp", val_x, row_start_y + row_gap * 2, 12.5f, 0.0f, 0.82f, 1.0f, 1.0f, 1.0f, win_w, win_h);
+
+    // Row 3: Engine
+    draw_ui_text("Architecture:", label_x, row_start_y + row_gap * 3, 12.5f, 0.55f, 0.65f, 0.78f, 1.0f, 1.0f, win_w, win_h);
+    draw_ui_text("C++20, Modern OpenGL 3.3 Core, VA-API / NVDEC HW", val_x, row_start_y + row_gap * 3, 12.5f, 0.85f, 0.88f, 0.92f, 1.0f, 1.0f, win_w, win_h);
+
+    // Row 4: Playback
+    draw_ui_text("Playback:", label_x, row_start_y + row_gap * 4, 12.5f, 0.55f, 0.65f, 0.78f, 1.0f, 1.0f, win_w, win_h);
+    draw_ui_text("4K / 8K / 16K, Microsecond A/V Sync, Zero Frame Drops", val_x, row_start_y + row_gap * 4, 12.5f, 0.85f, 0.88f, 0.92f, 1.0f, 1.0f, win_w, win_h);
+
+    // Row 5: License
+    draw_ui_text("License:", label_x, row_start_y + row_gap * 5, 12.5f, 0.55f, 0.65f, 0.78f, 1.0f, 1.0f, win_w, win_h);
+    draw_ui_text("Apache License 2.0 (Open Source)", val_x, row_start_y + row_gap * 5, 12.5f, 0.85f, 0.88f, 0.92f, 1.0f, 1.0f, win_w, win_h);
+
+    // Copyright
+    draw_ui_text("Copyright (c) 2026 Hamza Bellouch. All rights reserved.", label_x, row_start_y + row_gap * 6 + 5.0f, 11.0f, 0.45f, 0.52f, 0.62f, 0.90f, 1.0f, win_w, win_h);
+
+    // Bottom separator
+    draw_ui_rect(card_x + 24.0f, card_y + card_h - 58.0f, card_w - 48.0f, 1.0f, 0.16f, 0.20f, 0.28f, 0.80f, 1.0f, win_w, win_h);
+
+    // Bottom buttons
+    float gh_w = 210.0f;
+    float gh_h = 34.0f;
+    float gh_x = card_x + 24.0f;
+    float gh_y = card_y + card_h - 46.0f;
+    bool gh_hover = (mouse_x >= gh_x && mouse_x <= gh_x + gh_w && mouse_y >= gh_y && mouse_y <= gh_y + gh_h);
+
+    if (gh_hover) {
+        draw_ui_rounded_rect(gh_x, gh_y, gh_w, gh_h, 6.0f, 0.0f, 0.78f, 1.0f, 0.95f, 1.0f, win_w, win_h);
+        float tw = get_text_width("Open GitHub Repository", 12.0f);
+        draw_ui_text("Open GitHub Repository", gh_x + (gh_w - tw) / 2.0f, gh_y + 9.0f, 12.0f, 0.02f, 0.06f, 0.12f, 1.0f, 1.0f, win_w, win_h);
+    } else {
+        draw_ui_rounded_rect(gh_x, gh_y, gh_w, gh_h, 6.0f, 0.0f, 0.55f, 0.85f, 0.25f, 1.0f, win_w, win_h);
+        draw_ui_rounded_rect(gh_x + 1.0f, gh_y + 1.0f, gh_w - 2.0f, gh_h - 2.0f, 5.0f, 0.10f, 0.14f, 0.20f, 0.95f, 1.0f, win_w, win_h);
+        float tw = get_text_width("Open GitHub Repository", 12.0f);
+        draw_ui_text("Open GitHub Repository", gh_x + (gh_w - tw) / 2.0f, gh_y + 9.0f, 12.0f, 0.0f, 0.85f, 1.0f, 0.95f, 1.0f, win_w, win_h);
+    }
+
+    float cl_w = 90.0f;
+    float cl_h = 34.0f;
+    float cl_x = card_x + card_w - cl_w - 24.0f;
+    float cl_y = card_y + card_h - 46.0f;
+    bool cl_hover = (mouse_x >= cl_x && mouse_x <= cl_x + cl_w && mouse_y >= cl_y && mouse_y <= cl_y + cl_h);
+
+    if (cl_hover) {
+        draw_ui_rounded_rect(cl_x, cl_y, cl_w, cl_h, 6.0f, 0.35f, 0.40f, 0.48f, 0.95f, 1.0f, win_w, win_h);
+        float tw = get_text_width("Close", 13.0f);
+        draw_ui_text("Close", cl_x + (cl_w - tw) / 2.0f, cl_y + 9.0f, 13.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
+    } else {
+        draw_ui_rounded_rect(cl_x, cl_y, cl_w, cl_h, 6.0f, 0.20f, 0.24f, 0.32f, 0.80f, 1.0f, win_w, win_h);
+        float tw = get_text_width("Close", 13.0f);
+        draw_ui_text("Close", cl_x + (cl_w - tw) / 2.0f, cl_y + 9.0f, 13.0f, 0.85f, 0.88f, 0.92f, 1.0f, 1.0f, win_w, win_h);
+    }
+}
+
+int ShaderRenderer::hit_test_about_dialog(int win_w, int win_h, double mouse_x, double mouse_y) {
+    if (win_w <= 0 || win_h <= 0) return 0;
+
+    float card_w = std::min(static_cast<float>(win_w) - 30.0f, 600.0f);
+    float card_h = std::min(static_cast<float>(win_h) - 30.0f, 386.0f);
+    float card_x = (static_cast<float>(win_w) - card_w) / 2.0f;
+    float card_y = (static_cast<float>(win_h) - card_h) / 2.0f;
+
+    // Check Close [X] button at top-right
+    float close_sz = 24.0f;
+    float close_x = card_x + card_w - close_sz - 8.0f;
+    float close_y = card_y + 7.0f;
+    if (mouse_x >= close_x && mouse_x <= close_x + close_sz && mouse_y >= close_y && mouse_y <= close_y + close_sz) {
+        return 1; // Close
+    }
+
+    // Check [Close] button at bottom-right
+    float cl_w = 90.0f;
+    float cl_h = 34.0f;
+    float cl_x = card_x + card_w - cl_w - 24.0f;
+    float cl_y = card_y + card_h - 46.0f;
+    if (mouse_x >= cl_x && mouse_x <= cl_x + cl_w && mouse_y >= cl_y && mouse_y <= cl_y + cl_h) {
+        return 1; // Close
+    }
+
+    // Check [Open GitHub Repository] button
+    float gh_w = 210.0f;
+    float gh_h = 34.0f;
+    float gh_x = card_x + 24.0f;
+    float gh_y = card_y + card_h - 46.0f;
+    if (mouse_x >= gh_x && mouse_x <= gh_x + gh_w && mouse_y >= gh_y && mouse_y <= gh_y + gh_h) {
+        return 2; // GitHub
+    }
+
+    // Check GitHub link row
+    float val_x = card_x + 115.0f;
+    float row_start_y = card_y + 122.0f;
+    float row_gap = 25.0f;
+    float link_y = row_start_y + row_gap * 2;
+    if (mouse_x >= val_x && mouse_x <= val_x + 320.0f && mouse_y >= link_y - 2.0f && mouse_y <= link_y + 18.0f) {
+        return 2; // GitHub
+    }
+
+    // Inside card area
+    if (mouse_x >= card_x && mouse_x <= card_x + card_w && mouse_y >= card_y && mouse_y <= card_y + card_h) {
+        return 0; // Inside dialog
+    }
+
+    // Outside card (backdrop)
+    return -1; // Dismiss
+}
+
