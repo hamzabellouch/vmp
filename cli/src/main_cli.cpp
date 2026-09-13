@@ -74,7 +74,7 @@ static std::string get_file_size_string(uintmax_t size) {
 static void print_banner() {
     std::cout << Color::CYAN << Color::BOLD
               << "============================================================\n"
-              << "   VMP CLI v0.0.2-beta - Video Max Player CLI       \n"
+              << "   VMP CLI v0.0.3-beta - Video Max Player CLI       \n"
               << "   Probe Info | Hardware Acceleration | Telemetry Benchmark \n"
               << "============================================================\n"
               << Color::RESET;
@@ -522,11 +522,11 @@ int main(int argc, char* argv[]) {
     }
 
     if (command == "--version" || command == "-v" || command == "version") {
-        std::cout << Color::CYAN << Color::BOLD << "VMP v0.0.2-beta (Linux x86_64)\n" << Color::RESET
+        std::cout << Color::CYAN << Color::BOLD << "VMP v0.0.3-beta (Linux x86_64)\n" << Color::RESET
                   << "Ultra-Native High-Performance Video Max Player & Benchmark CLI\n"
-                  << "Version: v0.0.2-beta (Beta Preview)\n"
+                  << "Version: v0.0.3-beta (Beta Preview)\n"
                   << "Standard: C++20 | Optimizations: AVX2, FMA, LTO\n"
-                  << "License: MIT\n";
+                  << "License: Apache License 2.0\n";
         return 0;
     }
 
