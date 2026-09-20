@@ -1,3 +1,5 @@
+
+
 # VMP
 
 <h3 align="center">Ultra-Native Linux Video Max Player & Benchmarking Suite</h3>
@@ -253,7 +255,7 @@ gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor 2>/dev/null || true
 If you only need the command-line interface on a headless server, remote terminal, container, or CI/CD pipeline:
 
 ```bash
-# 1. Build the CLI binary (requires only FFmpeg and SDL2, no GUI libraries)
+# 1. Build the CLI binary (requires FFmpeg, SDL2, and libva; no GUI libraries)
 cd cli
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
@@ -488,5 +490,4 @@ Thank you for engaging with us. For inquiries or collaboration, please contact:
 hamzabellouchcontact@gmail.com
 
 Stay connected and follow us on:  
-[Facebook](https://facebook.com/hamzabellouch1) | [Instagram](https://instagram.com/hamzabellouch0) | [Twitter](https://twitter.com/hamzabellouch0) | [Telegram](https://t.me/hammzabellouch) | [LinkedIn](https://www.linkedin.com/in/hamzabellouch)
-
+[Facebook](https://facebook.com/hamzabellouch1) | [Instagram](https://instagram.com/hamzabellouch0) | [Twitter](https://twitter.com/hamzabellouch0) | [Telegram](https://t.me/hmmzabellouch) | [LinkedIn](https://www.linkedin.com/in/hamzabellouch)
