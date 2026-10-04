@@ -1,4 +1,4 @@
-# VMP CLI v0.0.3-beta - Ultra-Native Video Max Player CLI
+# VMP CLI v0.0.4-beta - Ultra-Native Video Max Player CLI
 
 A lightweight, high-performance standalone command-line tool for video probing, headless decoding speed benchmarks, hardware acceleration discovery, and playback resume management without requiring a graphical desktop environment.
 

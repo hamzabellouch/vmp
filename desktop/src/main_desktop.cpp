@@ -246,7 +246,7 @@ static void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 
 int main(int argc, char** argv) {
     std::cout << "============================================================" << std::endl;
-    std::cout << "      VMP ENGINE v0.0.3-beta - Video Max Player Platform    " << std::endl;
+    std::cout << "      VMP ENGINE v0.0.4-beta - Video Max Player Platform    " << std::endl;
     std::cout << "  High-Performance | Audio Sync | HDR Shaders | Telemetry   " << std::endl;
     std::cout << "============================================================" << std::endl;
 
@@ -271,9 +271,9 @@ int main(int argc, char** argv) {
         } else if (arg == "--force-hw" || arg == "--vaapi") {
             setenv("VMP_HW_ACCEL", "vaapi", 1);
         } else if (arg == "--version" || arg == "-v") {
-            std::cout << "\nVMP v0.0.3-beta (Linux x86_64)" << std::endl;
+            std::cout << "\nVMP v0.0.4-beta (Linux x86_64)" << std::endl;
             std::cout << "Ultra-Native High-Performance Video Max Player Engine" << std::endl;
-            std::cout << "Version: v0.0.3-beta (Beta Preview)" << std::endl;
+            std::cout << "Version: v0.0.4-beta (Beta Preview)" << std::endl;
             std::cout << "Standard: C++20 | Optimizations: AVX2, FMA, LTO" << std::endl;
             std::cout << "Graphics: OpenGL 3.3 Core Profile | Audio: SDL2" << std::endl;
             std::cout << "Decoders: FFmpeg libavcodec + VA-API / NVDEC + AVX2 Multi-Thread" << std::endl;

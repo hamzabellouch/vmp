@@ -6,8 +6,8 @@ The following versions of VMP are currently supported with security, stability, 
 
 | Version       | Supported          |
 | ------------- | ------------------ |
-| >= 0.0.3-beta | :white_check_mark: |
-| < 0.0.3-beta  | :x:                |
+| >= 0.0.4-beta | :white_check_mark: |
+| < 0.0.4-beta  | :x:                |
 
 
 

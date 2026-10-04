@@ -2230,7 +2230,7 @@ void ShaderRenderer::render_about_dialog(int win_w, int win_h, double mouse_x, d
 
     float badge_y = hero_y + 24.0f;
     draw_ui_rounded_rect(hero_tx, badge_y, 88.0f, 18.0f, 4.0f, 0.0f, 0.65f, 0.95f, 0.25f, 1.0f, win_w, win_h);
-    draw_ui_text("v0.0.3-beta", hero_tx + 8.0f, badge_y + 4.0f, 11.0f, 0.0f, 0.88f, 1.0f, 1.0f, 1.0f, win_w, win_h);
+    draw_ui_text("v0.0.4-beta", hero_tx + 8.0f, badge_y + 4.0f, 11.0f, 0.0f, 0.88f, 1.0f, 1.0f, 1.0f, win_w, win_h);
     draw_ui_text("Linux C++20 High-Performance Engine", hero_tx + 98.0f, badge_y + 4.0f, 11.5f, 0.60f, 0.70f, 0.80f, 0.90f, 1.0f, win_w, win_h);
 
     // Separator line
