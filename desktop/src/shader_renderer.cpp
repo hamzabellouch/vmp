@@ -271,7 +271,12 @@ void main() {
         float delta = fwidth(dist);
         float alpha = 1.0 - smoothstep(-delta, delta, dist);
         if (alpha <= 0.0) discard;
-        FragColor = vec4(uColor.rgb, uColor.a * uAlpha * alpha);
+        if (uUseTex) {
+            vec4 texColor = texture(uTex, TexCoord);
+            FragColor = vec4(uColor.rgb * texColor.rgb, texColor.a * uColor.a * uAlpha * alpha);
+        } else {
+            FragColor = vec4(uColor.rgb, uColor.a * uAlpha * alpha);
+        }
     } else if (uUseTex) {
         vec4 texColor = texture(uTex, TexCoord);
         FragColor = vec4(uColor.rgb * texColor.rgb, texColor.a * uColor.a * uAlpha);
@@ -864,6 +869,42 @@ void ShaderRenderer::draw_ui_icon(GLuint tex, float x, float y, float w, float h
     glDisable(GL_BLEND);
 }
 
+void ShaderRenderer::draw_ui_rounded_icon(GLuint tex, float x, float y, float w, float h, float radius, float r, float g, float b, float a, float ui_alpha, int win_w, int win_h) {
+    if (ui_alpha <= 0.001f || !ui_shader_program || !tex || w <= 0.0f || h <= 0.0f) return;
+    float vertices[] = {
+        x,     y,     0.0f, 0.0f,
+        x,     y + h, 0.0f, 1.0f,
+        x + w, y + h, 1.0f, 1.0f,
+
+        x,     y,     0.0f, 0.0f,
+        x + w, y + h, 1.0f, 1.0f,
+        x + w, y,     1.0f, 0.0f
+    };
+
+    glUseProgram(ui_shader_program);
+    glUniform2f(glGetUniformLocation(ui_shader_program, "uScreenSize"), static_cast<float>(win_w), static_cast<float>(win_h));
+    glUniform1i(glGetUniformLocation(ui_shader_program, "uUseTex"), 1);
+    glUniform1i(glGetUniformLocation(ui_shader_program, "uIsCircle"), 0);
+    glUniform1i(glGetUniformLocation(ui_shader_program, "uIsRoundedRect"), 1);
+    glUniform2f(glGetUniformLocation(ui_shader_program, "uRectSize"), w, h);
+    glUniform1f(glGetUniformLocation(ui_shader_program, "uRadius"), radius);
+    glUniform4f(glGetUniformLocation(ui_shader_program, "uColor"), r, g, b, a);
+    glUniform1f(glGetUniformLocation(ui_shader_program, "uAlpha"), ui_alpha);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glUniform1i(glGetUniformLocation(ui_shader_program, "uTex"), 0);
+
+    glBindVertexArray(ui_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, ui_vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glDisable(GL_BLEND);
+}
+
 bool ShaderRenderer::init_font_engine() {
     if (font_initialized) return true;
 
@@ -1150,7 +1191,7 @@ void ShaderRenderer::render_ui_overlay(int win_w, int win_h, double current_sec,
                                        const std::string& video_size, const std::string& video_date, 
                                        const std::string& video_resolution, const std::string& codec_name, 
                                        double fps, const std::string& hw_status, const std::string& active_subtitle,
-                                       const std::string& osd_notification) {
+                                       const std::string& osd_notification, bool show_back_btn) {
     if (win_w <= 0 || win_h <= 0) return;
     glViewport(0, 0, win_w, win_h);
 
@@ -1199,15 +1240,17 @@ void ShaderRenderer::render_ui_overlay(int win_w, int win_h, double current_sec,
         float back_btn_x = 20.0f;
         float back_btn_y = is_fullscreen ? 16.0f : 36.0f;
 
-        bool back_hover = (mouse_x >= back_btn_x - 6.0f && mouse_x <= back_btn_x + back_btn_sz + 6.0f &&
-                          mouse_y >= back_btn_y - 6.0f && mouse_y <= back_btn_y + back_btn_sz + 6.0f);
+        if (show_back_btn) {
+            bool back_hover = (mouse_x >= back_btn_x - 6.0f && mouse_x <= back_btn_x + back_btn_sz + 6.0f &&
+                              mouse_y >= back_btn_y - 6.0f && mouse_y <= back_btn_y + back_btn_sz + 6.0f);
 
-        float back_alpha = back_hover ? 1.0f : ui_alpha;
-        if (back_alpha > 0.005f) {
-            if (back_hover) {
-                draw_ui_icon(tex_icon_arrow_back, back_btn_x, back_btn_y, back_btn_sz, back_btn_sz, 0.0f, 0.85f, 1.0f, 1.0f, back_alpha, win_w, win_h);
-            } else {
-                draw_ui_icon(tex_icon_arrow_back, back_btn_x, back_btn_y, back_btn_sz, back_btn_sz, 1.0f, 1.0f, 1.0f, 0.90f, back_alpha, win_w, win_h);
+            float back_alpha = back_hover ? 1.0f : ui_alpha;
+            if (back_alpha > 0.005f) {
+                if (back_hover) {
+                    draw_ui_icon(tex_icon_arrow_back, back_btn_x, back_btn_y, back_btn_sz, back_btn_sz, 0.0f, 0.85f, 1.0f, 1.0f, back_alpha, win_w, win_h);
+                } else {
+                    draw_ui_icon(tex_icon_arrow_back, back_btn_x, back_btn_y, back_btn_sz, back_btn_sz, 1.0f, 1.0f, 1.0f, 0.90f, back_alpha, win_w, win_h);
+                }
             }
         }
 
@@ -1518,10 +1561,10 @@ void ShaderRenderer::render_welcome_screen(int win_w, int win_h, double mouse_x,
 
     if (btn_hover) {
         draw_ui_rounded_rect(btn_x, btn_y, btn_w, btn_h, btn_h / 2.0f, 0.0f, 0.50f, 0.85f, 0.90f, 1.0f, win_w, win_h);
-        draw_ui_text(btn_txt, txt_x, btn_y + (10.0f * scale), txt_font_sz, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
+        draw_ui_text(btn_txt, txt_x, btn_y + (12.0f * scale), txt_font_sz, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
     } else {
         draw_ui_rounded_rect(btn_x, btn_y, btn_w, btn_h, btn_h / 2.0f, 0.16f, 0.20f, 0.28f, 0.85f, 1.0f, win_w, win_h);
-        draw_ui_text(btn_txt, txt_x, btn_y + (10.0f * scale), txt_font_sz, 0.90f, 0.92f, 0.95f, 0.95f, 1.0f, win_w, win_h);
+        draw_ui_text(btn_txt, txt_x, btn_y + (12.0f * scale), txt_font_sz, 0.90f, 0.92f, 0.95f, 0.95f, 1.0f, win_w, win_h);
     }
 }
 
@@ -1539,170 +1582,259 @@ GLuint ShaderRenderer::create_rgb_texture(const uint8_t* rgb_data, int width, in
     return tex;
 }
 
+GalleryGeometry ShaderRenderer::get_gallery_geometry(int win_w, int win_h, size_t item_count, float scroll_y, bool is_fullscreen) {
+    GalleryGeometry g;
+    if (win_w <= 0 || win_h <= 0) return g;
+
+    float menu_bar_h = is_fullscreen ? 0.0f : 26.0f;
+    g.header_y = menu_bar_h;
+    g.header_h = 56.0f;
+    g.grid_top = g.header_y + g.header_h + 18.0f;
+
+    g.pad_x = 24.0f;
+    g.gap_x = 18.0f;
+    g.gap_y = 20.0f;
+    g.sbar_w = 8.0f;
+
+    // Reserve 20px on the right for the sleek scrollbar
+    float sbar_reserve = 20.0f;
+    float avail_w = static_cast<float>(win_w) - 2.0f * g.pad_x - sbar_reserve;
+    if (avail_w < 100.0f) avail_w = 100.0f;
+
+    // 5 cards per row on desktop (width >= 1000px):
+    if (avail_w >= 1000.0f) {
+        g.num_cols = 5;
+    } else {
+        g.num_cols = std::max(2, std::min(4, static_cast<int>((avail_w + g.gap_x) / 240.0f)));
+    }
+
+    g.card_w = (avail_w - static_cast<float>(g.num_cols - 1) * g.gap_x) / static_cast<float>(g.num_cols);
+    g.inner_pad = 7.0f;
+    g.thumb_w = g.card_w - 2.0f * g.inner_pad;
+    g.thumb_h = g.thumb_w * (9.0f / 16.0f);
+    g.text_h = 64.0f;
+    g.card_h = g.inner_pad + g.thumb_h + g.text_h;
+
+    g.num_rows = (static_cast<int>(item_count) + g.num_cols - 1) / g.num_cols;
+    g.total_content_h = (g.num_rows > 0) ? (static_cast<float>(g.num_rows) * (g.card_h + g.gap_y) - g.gap_y) : 0.0f;
+    g.view_height = static_cast<float>(win_h) - g.grid_top - 10.0f;
+    if (g.view_height < 50.0f) g.view_height = 50.0f;
+
+    g.max_scroll_y = std::max(0.0f, g.total_content_h - g.view_height + 20.0f);
+
+    // Right-Hand Scrollbar Geometry
+    g.sbar_x = static_cast<float>(win_w) - g.sbar_w - 6.0f;
+    g.sbar_track_y = g.grid_top;
+    g.sbar_track_h = static_cast<float>(win_h) - g.grid_top - 12.0f;
+    if (g.sbar_track_h < 40.0f) g.sbar_track_h = 40.0f;
+
+    if (g.total_content_h > 0.0f) {
+        float ratio = g.view_height / g.total_content_h;
+        g.thumb_h_bar = std::clamp(ratio * g.sbar_track_h, 36.0f, g.sbar_track_h);
+    } else {
+        g.thumb_h_bar = g.sbar_track_h;
+    }
+
+    float scroll_pct = (g.max_scroll_y > 0.0f) ? std::clamp(scroll_y / g.max_scroll_y, 0.0f, 1.0f) : 0.0f;
+    g.thumb_y_bar = g.sbar_track_y + scroll_pct * (g.sbar_track_h - g.thumb_h_bar);
+
+    return g;
+}
+
 void ShaderRenderer::render_folder_gallery(int win_w, int win_h, double mouse_x, double mouse_y,
                                            const std::string& folder_path, const std::vector<FolderMediaItem>& items,
-                                           int scroll_offset, bool is_fullscreen) {
+                                           float scroll_y, bool is_fullscreen, bool is_dragging_scrollbar) {
     if (win_w <= 0 || win_h <= 0) return;
     glViewport(0, 0, win_w, win_h);
     glClearColor(0.035f, 0.045f, 0.075f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    // 1. Header Bar (shifted below VLC menu bar if not fullscreen)
-    float menu_bar_h = is_fullscreen ? 0.0f : 28.0f;
-    float header_y = menu_bar_h;
-    float header_h = 56.0f;
-    draw_ui_rect(0, header_y, win_w, header_h, 0.05f, 0.07f, 0.12f, 0.95f, 1.0f, win_w, win_h);
-    draw_ui_rect(0, header_y + header_h - 1.0f, win_w, 1.0f, 0.0f, 0.85f, 1.0f, 0.35f, 1.0f, win_w, win_h);
+    auto geom = get_gallery_geometry(win_w, win_h, items.size(), scroll_y, is_fullscreen);
+
+    if (items.empty()) {
+        std::string empty_msg = "NO MEDIA FILES FOUND IN THIS FOLDER";
+        float msg_w = get_text_width(empty_msg, 16.0f);
+        draw_ui_text(empty_msg, (win_w - msg_w) / 2.0f, win_h / 2.0f - 20.0f, 16.0f, 0.8f, 0.8f, 0.8f, 0.7f, 1.0f, win_w, win_h);
+    } else {
+        // Scissor test to cleanly mask cards under header
+        glEnable(GL_SCISSOR_TEST);
+        int scissor_bottom = 0;
+        int scissor_h = std::max(0, win_h - static_cast<int>(geom.header_y + geom.header_h));
+        glScissor(0, scissor_bottom, win_w, scissor_h);
+
+        float thumb_radius = 8.0f;
+
+        for (size_t i = 0; i < items.size(); i++) {
+            int r = static_cast<int>(i) / geom.num_cols;
+            int c = static_cast<int>(i) % geom.num_cols;
+
+            float card_x = geom.pad_x + static_cast<float>(c) * (geom.card_w + geom.gap_x);
+            float card_y = geom.grid_top + static_cast<float>(r) * (geom.card_h + geom.gap_y) - scroll_y;
+
+            if (card_y + geom.card_h < geom.grid_top || card_y > static_cast<float>(win_h) + 20.0f) {
+                continue;
+            }
+
+            bool card_hover = (!is_dragging_scrollbar &&
+                               mouse_x >= card_x && mouse_x <= card_x + geom.card_w &&
+                               mouse_y >= std::max(geom.grid_top, card_y) && mouse_y <= std::min(static_cast<float>(win_h), card_y + geom.card_h));
+
+            // Card Outer Border and Background Surface (consistent subtle border without any glowing lines)
+            draw_ui_rounded_rect(card_x - 1.0f, card_y - 1.0f, geom.card_w + 2.0f, geom.card_h + 2.0f, 13.0f, 0.14f, 0.18f, 0.26f, 0.80f, 1.0f, win_w, win_h);
+            draw_ui_rounded_rect(card_x, card_y, geom.card_w, geom.card_h, 12.0f, 0.06f, 0.08f, 0.12f, 0.96f, 1.0f, win_w, win_h);
+
+            // Inner Thumbnail Placement
+            float thumb_x = card_x + geom.inner_pad;
+            float thumb_y = card_y + geom.inner_pad;
+
+            // Dark base underneath thumbnail
+            draw_ui_rounded_rect(thumb_x, thumb_y, geom.thumb_w, geom.thumb_h, thumb_radius, 0.03f, 0.04f, 0.07f, 1.0f, 1.0f, win_w, win_h);
+
+            if (items[i].thumb_tex != 0) {
+                draw_ui_rounded_icon(items[i].thumb_tex, thumb_x, thumb_y, geom.thumb_w, geom.thumb_h, thumb_radius, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
+            } else {
+                float ph_icon_sz = 34.0f;
+                float ph_x = std::round(thumb_x + geom.thumb_w / 2.0f - (72.0f / 128.0f) * ph_icon_sz);
+                float ph_y = std::round(thumb_y + (geom.thumb_h - ph_icon_sz) / 2.0f);
+                draw_ui_icon(tex_icon_play, ph_x, ph_y, ph_icon_sz, ph_icon_sz, 0.0f, 0.75f, 1.0f, 0.40f, 1.0f, win_w, win_h);
+            }
+
+            // Thumbnail Top-Left Index Tag
+            char idx_buf[16];
+            snprintf(idx_buf, sizeof(idx_buf), "#%02d", static_cast<int>(i) + 1);
+            float tag_txt_w = get_text_width(idx_buf, 11.0f);
+            float tag_w = tag_txt_w + 12.0f;
+            float tag_h = 19.0f;
+            float tag_x = thumb_x + 8.0f;
+            float tag_y = thumb_y + 8.0f;
+            draw_ui_rounded_rect(tag_x, tag_y, tag_w, tag_h, 5.0f, 0.02f, 0.03f, 0.06f, 0.75f, 1.0f, win_w, win_h);
+            draw_ui_text(idx_buf, tag_x + 6.0f, tag_y + 4.0f, 11.0f, 0.0f, 0.85f, 1.0f, 0.90f, 1.0f, win_w, win_h);
+
+            // Thumbnail Bottom-Right DURATION BADGE
+            std::string dur_str = items[i].duration_str.empty() ? "00:00" : items[i].duration_str;
+            float dur_txt_w = get_text_width(dur_str, 11.5f);
+            float dur_w = dur_txt_w + 14.0f;
+            float dur_h = 20.0f;
+            float dur_x = thumb_x + geom.thumb_w - dur_w - 8.0f;
+            float dur_y = thumb_y + geom.thumb_h - dur_h - 8.0f;
+            draw_ui_rounded_rect(dur_x, dur_y, dur_w, dur_h, 5.0f, 0.02f, 0.03f, 0.06f, 0.85f, 1.0f, win_w, win_h);
+            draw_ui_text(dur_str, dur_x + 7.0f, dur_y + 4.5f, 11.5f, 1.0f, 1.0f, 1.0f, 0.98f, 1.0f, win_w, win_h);
+
+            // Hover Play Overlay in Center of Thumbnail
+            if (card_hover) {
+                draw_ui_rounded_rect(thumb_x, thumb_y, geom.thumb_w, geom.thumb_h, thumb_radius, 0.0f, 0.0f, 0.0f, 0.35f, 1.0f, win_w, win_h);
+                // Center circle in the exact geometric center of thumbnail
+                float center_x = thumb_x + geom.thumb_w / 2.0f;
+                float center_y = thumb_y + geom.thumb_h / 2.0f;
+                float play_btn_r = 22.0f;
+                draw_ui_circle(center_x, center_y, play_btn_r, 0.0f, 0.82f, 1.0f, 0.95f, 1.0f, win_w, win_h);
+
+                // Dead-center play triangle icon inside the circle (optically balanced: 15px margins on both left and right)
+                float play_icon_sz = 28.0f;
+                float icon_x = std::round(center_x + 1.2f - (72.0f / 128.0f) * play_icon_sz);
+                float icon_y = std::round(center_y - play_icon_sz * 0.5f);
+                draw_ui_icon(tex_icon_play, icon_x, icon_y, play_icon_sz, play_icon_sz, 0.02f, 0.05f, 0.10f, 1.0f, 1.0f, win_w, win_h);
+            }
+
+            // Title in bottom part of card
+            float avail_title_w = geom.card_w - 24.0f;
+            std::string fname = items[i].filename;
+            if (get_text_width(fname, 14.0f) > avail_title_w && fname.length() > 6) {
+                while (fname.length() > 4 && get_text_width(fname + "...", 14.0f) > avail_title_w) {
+                    fname.pop_back();
+                }
+                fname += "...";
+            }
+            float title_y = thumb_y + geom.thumb_h + 10.0f;
+            if (card_hover) {
+                draw_ui_text(fname, card_x + 12.0f, title_y, 14.0f, 0.0f, 0.88f, 1.0f, 1.0f, 1.0f, win_w, win_h);
+            } else {
+                draw_ui_text(fname, card_x + 12.0f, title_y, 14.0f, 0.95f, 0.96f, 0.98f, 0.95f, 1.0f, win_w, win_h);
+            }
+
+            // Unified Metadata Row: Folder • Size
+            float meta_y = title_y + 23.0f;
+            float cur_meta_x = card_x + 12.0f;
+
+            if (!items[i].folder_name.empty()) {
+                std::string fld = items[i].folder_name;
+                float size_w = get_text_width(items[i].size_str, 11.5f);
+                float max_fld_w = avail_title_w - size_w - 24.0f;
+                if (max_fld_w < 40.0f) max_fld_w = 40.0f;
+                if (get_text_width(fld, 11.5f) > max_fld_w && fld.length() > 4) {
+                    while (fld.length() > 3 && get_text_width(fld + "...", 11.5f) > max_fld_w) {
+                        fld.pop_back();
+                    }
+                    fld += "...";
+                }
+                draw_ui_text(fld, cur_meta_x, meta_y, 11.5f, 0.0f, 0.75f, 0.92f, 0.85f, 1.0f, win_w, win_h);
+                cur_meta_x += get_text_width(fld, 11.5f) + 8.0f;
+
+                // Separator Dot
+                draw_ui_circle(cur_meta_x + 2.0f, meta_y + 6.0f, 2.0f, 0.40f, 0.48f, 0.58f, 0.70f, 1.0f, win_w, win_h);
+                cur_meta_x += 12.0f;
+            }
+
+            draw_ui_text(items[i].size_str, cur_meta_x, meta_y, 11.5f, 0.60f, 0.68f, 0.78f, 0.85f, 1.0f, win_w, win_h);
+        }
+
+        glDisable(GL_SCISSOR_TEST);
+
+        // Right-Side Smooth Scrollbar
+        if (geom.max_scroll_y > 0.0f) {
+            bool sbar_hover = (mouse_x >= geom.sbar_x - 6.0f && mouse_x <= static_cast<double>(win_w) &&
+                               mouse_y >= geom.sbar_track_y && mouse_y <= geom.sbar_track_y + geom.sbar_track_h);
+            bool thumb_hover = (mouse_x >= geom.sbar_x - 6.0f && mouse_x <= static_cast<double>(win_w) &&
+                                mouse_y >= geom.thumb_y_bar && mouse_y <= geom.thumb_y_bar + geom.thumb_h_bar);
+
+            // Scrollbar Track
+            draw_ui_rounded_rect(geom.sbar_x, geom.sbar_track_y, geom.sbar_w, geom.sbar_track_h,
+                                 geom.sbar_w * 0.5f, 0.08f, 0.11f, 0.16f, 0.35f, 1.0f, win_w, win_h);
+
+            // Scrollbar Thumb (constant sleek appearance, does not light up on hover)
+            float bar_radius = geom.sbar_w * 0.5f;
+            draw_ui_rounded_rect(geom.sbar_x, geom.thumb_y_bar, geom.sbar_w, geom.thumb_h_bar,
+                                 bar_radius, 0.26f, 0.32f, 0.42f, 0.65f, 1.0f, win_w, win_h);
+        }
+    }
+
+    // Top Header Bar
+    draw_ui_rect(0, geom.header_y, win_w, geom.header_h, 0.05f, 0.07f, 0.12f, 0.98f, 1.0f, win_w, win_h);
+    draw_ui_rect(0, geom.header_y + geom.header_h - 1.0f, win_w, 1.0f, 0.14f, 0.18f, 0.26f, 0.70f, 1.0f, win_w, win_h);
 
     // Folder Name Title
     std::string folder_display = "";
     if (folder_path == "ALL_VIDEOS" || folder_path.empty()) {
-        folder_display = "ALL VIDEOS (Kali Linux Library)";
+        folder_display = "VMP";
     } else {
         folder_display = "FOLDER: " + folder_path;
         if (folder_display.length() > 38) {
             folder_display = "FOLDER: ..." + folder_path.substr(folder_path.length() - 32);
         }
     }
-    std::string count_str = " (" + std::to_string(items.size()) + " Videos)";
-    draw_ui_text(folder_display + count_str, 24.0f, header_y + 18.0f, 15.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
+    float title_font_sz = (folder_display == "VMP") ? 16.0f : 15.0f;
+    draw_ui_text(folder_display, 24.0f, geom.header_y + 18.0f, title_font_sz, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
+    float title_w = get_text_width(folder_display, title_font_sz);
+    std::string count_str = std::to_string(items.size()) + " Videos";
+    float cnt_txt_w = get_text_width(count_str, 11.5f);
+    float badge_w = cnt_txt_w + 16.0f;
+    float badge_x = 24.0f + title_w + 12.0f;
+    draw_ui_rounded_rect(badge_x, geom.header_y + 17.0f, badge_w, 22.0f, 11.0f, 0.10f, 0.15f, 0.24f, 0.90f, 1.0f, win_w, win_h);
+    draw_ui_text(count_str, badge_x + 8.0f, geom.header_y + 22.0f, 11.5f, 0.0f, 0.85f, 1.0f, 0.95f, 1.0f, win_w, win_h);
 
-    // "SELECT FOLDER" Button on Top Right
+    // "SELECT FOLDER" Button on Top Right (keeps clean dark color without lighting up)
     float chg_btn_w = 170.0f;
     float chg_btn_h = 32.0f;
     float chg_btn_x = win_w - chg_btn_w - 24.0f;
-    float chg_btn_y = header_y + 12.0f;
-
-    bool chg_hover = (mouse_x >= chg_btn_x && mouse_x <= chg_btn_x + chg_btn_w &&
-                      mouse_y >= chg_btn_y && mouse_y <= chg_btn_y + chg_btn_h);
+    float chg_btn_y = geom.header_y + 12.0f;
 
     std::string sel_txt = "SELECT FOLDER";
-    float sel_w = get_text_width(sel_txt, 14.0f);
+    float sel_w = get_text_width(sel_txt, 13.5f);
     float sel_x = chg_btn_x + (chg_btn_w - sel_w) / 2.0f;
 
-    if (chg_hover) {
-        draw_ui_rounded_rect(chg_btn_x, chg_btn_y, chg_btn_w, chg_btn_h, 16.0f, 0.0f, 0.85f, 1.0f, 0.90f, 1.0f, win_w, win_h);
-        draw_ui_text(sel_txt, sel_x, chg_btn_y + 8.0f, 14.0f, 0.02f, 0.05f, 0.10f, 1.0f, 1.0f, win_w, win_h);
-    } else {
-        draw_ui_rounded_rect(chg_btn_x, chg_btn_y, chg_btn_w, chg_btn_h, 16.0f, 0.0f, 0.40f, 0.70f, 0.45f, 1.0f, win_w, win_h);
-        draw_ui_text(sel_txt, sel_x, chg_btn_y + 8.0f, 14.0f, 1.0f, 1.0f, 1.0f, 0.95f, 1.0f, win_w, win_h);
-    }
-
-    if (items.empty()) {
-        std::string empty_msg = "NO MEDIA FILES FOUND IN THIS FOLDER";
-        float msg_w = get_text_width(empty_msg, 16.0f);
-        draw_ui_text(empty_msg, (win_w - msg_w) / 2.0f, win_h / 2.0f - 20.0f, 16.0f, 0.8f, 0.8f, 0.8f, 0.7f, 1.0f, win_w, win_h);
-        return;
-    }
-
-    // 2. Responsive Grid Geometry Calculation
-    float grid_top = header_y + header_h + 16.0f;
-    float pad_x = 24.0f;
-    float gap_x = 18.0f;
-    float gap_y = 20.0f;
-    float avail_w = static_cast<float>(win_w) - 2.0f * pad_x;
-
-    int num_cols = std::max(2, std::min(6, static_cast<int>((avail_w + gap_x) / 240.0f)));
-    float card_w = (avail_w - (num_cols - 1) * gap_x) / num_cols;
-    float thumb_h = card_w * (9.0f / 16.0f); // 16:9 thumbnail aspect ratio
-    float text_h = 56.0f;
-    float card_h = thumb_h + text_h;
-
-    int num_rows = (static_cast<int>(items.size()) + num_cols - 1) / num_cols;
-    int scroll_row = std::max(0, std::min(num_rows - 1, scroll_offset));
-
-    for (size_t i = 0; i < items.size(); i++) {
-        int r = static_cast<int>(i) / num_cols;
-        int c = static_cast<int>(i) % num_cols;
-
-        int row_on_screen = r - scroll_row;
-        if (row_on_screen < 0) continue;
-
-        float card_x = pad_x + c * (card_w + gap_x);
-        float card_y = grid_top + row_on_screen * (card_h + gap_y);
-
-        if (card_y + card_h > win_h + 50.0f) break;
-
-        bool card_hover = (mouse_x >= card_x && mouse_x <= card_x + card_w &&
-                           mouse_y >= card_y && mouse_y <= card_y + card_h);
-
-        // Card Outer Border and Background Panel
-        if (card_hover) {
-            draw_ui_rounded_rect(card_x - 3.0f, card_y - 3.0f, card_w + 6.0f, card_h + 6.0f, 14.0f, 0.0f, 0.85f, 1.0f, 0.40f, 1.0f, win_w, win_h);
-            draw_ui_rounded_rect(card_x, card_y, card_w, card_h, 12.0f, 0.08f, 0.12f, 0.20f, 0.98f, 1.0f, win_w, win_h);
-        } else {
-            draw_ui_rounded_rect(card_x, card_y, card_w, card_h, 12.0f, 0.05f, 0.07f, 0.12f, 0.90f, 1.0f, win_w, win_h);
-        }
-
-        // Thumbnail Preview
-        if (items[i].thumb_tex != 0) {
-            draw_ui_icon(items[i].thumb_tex, card_x, card_y, card_w, thumb_h, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
-        } else {
-            // Placeholder dark container with glowing play icon
-            draw_ui_rounded_rect(card_x, card_y, card_w, thumb_h, 10.0f, 0.03f, 0.04f, 0.08f, 1.0f, 1.0f, win_w, win_h);
-            float ph_icon_sz = 32.0f;
-            draw_ui_icon(tex_icon_play, card_x + (card_w - ph_icon_sz) / 2.0f, card_y + (thumb_h - ph_icon_sz) / 2.0f,
-                         ph_icon_sz, ph_icon_sz, 0.0f, 0.85f, 1.0f, 0.75f, 1.0f, win_w, win_h);
-        }
-
-        // Thumbnail Top-Left Index Tag
-        char idx_buf[16];
-        snprintf(idx_buf, sizeof(idx_buf), "#%02d", static_cast<int>(i) + 1);
-        float tag_w = 34.0f, tag_h = 18.0f;
-        draw_ui_rounded_rect(card_x + 6.0f, card_y + 6.0f, tag_w, tag_h, 4.0f, 0.0f, 0.0f, 0.0f, 0.75f, 1.0f, win_w, win_h);
-        draw_ui_text(idx_buf, card_x + 9.0f, card_y + 3.0f, 11.0f, 0.0f, 0.90f, 1.0f, 0.95f, 1.0f, win_w, win_h);
-
-        // Thumbnail Bottom-Right DURATION BADGE (توقيت / مدة الفيديو)
-        std::string dur_str = items[i].duration_str.empty() ? "00:00" : items[i].duration_str;
-        float dur_w = get_text_width(dur_str, 11.0f) + 12.0f;
-        float dur_h = 18.0f;
-        float dur_x = card_x + card_w - dur_w - 6.0f;
-        float dur_y = card_y + thumb_h - dur_h - 6.0f;
-        draw_ui_rounded_rect(dur_x, dur_y, dur_w, dur_h, 4.0f, 0.0f, 0.0f, 0.0f, 0.85f, 1.0f, win_w, win_h);
-        draw_ui_text(dur_str, dur_x + 6.0f, dur_y + 3.0f, 11.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
-
-        // Hover Play Overlay in Center of Thumbnail
-        if (card_hover) {
-            float play_ovl_sz = 38.0f;
-            float ovl_x = card_x + (card_w - play_ovl_sz) / 2.0f;
-            float ovl_y = card_y + (thumb_h - play_ovl_sz) / 2.0f;
-            draw_ui_circle(ovl_x + play_ovl_sz / 2.0f, ovl_y + play_ovl_sz / 2.0f, 22.0f, 0.0f, 0.85f, 1.0f, 0.90f, 1.0f, win_w, win_h);
-            draw_ui_icon(tex_icon_play, ovl_x + 2.0f, ovl_y + 2.0f, play_ovl_sz - 4.0f, play_ovl_sz - 4.0f, 0.02f, 0.05f, 0.10f, 1.0f, 1.0f, win_w, win_h);
-        }
-
-        // Title and details in bottom part of card
-        std::string fname = items[i].filename;
-        float avail_title_w = card_w - 16.0f;
-        if (get_text_width(fname, 13.5f) > avail_title_w && fname.length() > 6) {
-            while (fname.length() > 4 && get_text_width(fname + "...", 13.5f) > avail_title_w) {
-                fname.pop_back();
-            }
-            fname += "...";
-        }
-        float title_y = card_y + thumb_h + 8.0f;
-        if (card_hover) {
-            draw_ui_text(fname, card_x + 8.0f, title_y, 13.5f, 0.0f, 0.90f, 1.0f, 1.0f, 1.0f, win_w, win_h);
-        } else {
-            draw_ui_text(fname, card_x + 8.0f, title_y, 13.5f, 1.0f, 1.0f, 1.0f, 0.95f, 1.0f, win_w, win_h);
-        }
-
-        // Subtitle text (Folder attribution & Size)
-        float avail_sub_w = card_w - 16.0f;
-        std::string folder_lbl = items[i].folder_name.empty() ? "" : ("From Folder: " + items[i].folder_name);
-        if (!folder_lbl.empty()) {
-            std::string disp_folder = folder_lbl;
-            if (get_text_width(disp_folder, 11.0f) > avail_sub_w && disp_folder.length() > 10) {
-                while (disp_folder.length() > 8 && get_text_width(disp_folder + "...", 11.0f) > avail_sub_w) {
-                    disp_folder.pop_back();
-                }
-                disp_folder += "...";
-            }
-            draw_ui_text(disp_folder, card_x + 8.0f, title_y + 19.0f, 11.0f, 0.0f, 0.85f, 1.0f, 0.95f, 1.0f, win_w, win_h);
-            draw_ui_text(items[i].size_str, card_x + 8.0f, title_y + 35.0f, 10.5f, 0.60f, 0.70f, 0.80f, 0.75f, 1.0f, win_w, win_h);
-        } else {
-            draw_ui_text(items[i].size_str, card_x + 8.0f, title_y + 20.0f, 11.0f, 0.60f, 0.70f, 0.80f, 0.75f, 1.0f, win_w, win_h);
-        }
-    }
+    draw_ui_rounded_rect(chg_btn_x - 1.0f, chg_btn_y - 1.0f, chg_btn_w + 2.0f, chg_btn_h + 2.0f, 17.0f, 0.18f, 0.24f, 0.35f, 0.60f, 1.0f, win_w, win_h);
+    draw_ui_rounded_rect(chg_btn_x, chg_btn_y, chg_btn_w, chg_btn_h, 16.0f, 0.10f, 0.14f, 0.22f, 0.90f, 1.0f, win_w, win_h);
+    draw_ui_text(sel_txt, sel_x, chg_btn_y + 10.0f, 13.5f, 0.88f, 0.92f, 0.98f, 0.95f, 1.0f, win_w, win_h);
 }
 
 void ShaderRenderer::init_vlc_menus() {
@@ -1712,6 +1844,7 @@ void ShaderRenderer::init_vlc_menus() {
     media.title = "Media";
     media.items = {
         {"Open File...", "Ctrl+O", VlcMenuAction::MEDIA_OPEN_FILE},
+        {"Open Network Stream...", "Ctrl+N", VlcMenuAction::MEDIA_OPEN_URL},
         {"Open Folder...", "O", VlcMenuAction::MEDIA_OPEN_FOLDER},
         {"Quit Application", "Esc", VlcMenuAction::MEDIA_QUIT}
     };
@@ -1776,13 +1909,15 @@ void ShaderRenderer::render_vlc_menu_bar(int win_w, int win_h, double mouse_x, d
     float menu_h = 26.0f;
     float font_sz = 13.0f;
 
-    // VLC Menu Bar dark background (#21232a)
-    draw_ui_rect(0, 0, static_cast<float>(win_w), menu_h, 0.13f, 0.14f, 0.17f, 1.0f, menu_alpha, win_w, win_h);
-    // Subtle 1px bottom border line (#18191f)
-    draw_ui_rect(0, menu_h - 1.0f, static_cast<float>(win_w), 1.0f, 0.09f, 0.10f, 0.12f, 1.0f, menu_alpha, win_w, win_h);
+    // VLC Menu Bar dark background: exact same color as Kali Linux window titlebar (#23252e / RGB 35, 37, 46)
+    // Seamlessly merged with the window title as if they are one, exactly like in VLC
+    draw_ui_rect(0, 0, static_cast<float>(win_w), menu_h, 0.137f, 0.145f, 0.180f, 1.0f, menu_alpha, win_w, win_h);
+    // Subtle bottom border line (#1a1b22) before the video viewport
+    draw_ui_rect(0, menu_h - 1.0f, static_cast<float>(win_w), 1.0f, 0.10f, 0.11f, 0.14f, 0.75f, menu_alpha, win_w, win_h);
 
-    float text_y = 5.0f;
+    float text_y = 7.0f;
     float cur_x = 8.0f;
+
     for (size_t i = 0; i < vlc_menus.size(); ++i) {
         auto& cat = vlc_menus[i];
         float text_w = get_text_width(cat.title, font_sz);
@@ -1844,6 +1979,7 @@ void ShaderRenderer::render_vlc_dropdown(int win_w, int win_h, double mouse_x, d
     for (size_t i = 0; i < cat.items.size(); ++i) {
         const auto& item = cat.items[i];
         float it_y = drop_y + 4.0f + static_cast<float>(i) * item_h;
+        float item_text_y = it_y + 7.0f;
 
         bool it_hover = (mouse_x >= drop_x + 2.0f && mouse_x <= drop_x + card_w - 2.0f &&
                          mouse_y >= it_y && mouse_y < it_y + item_h);
@@ -1851,17 +1987,17 @@ void ShaderRenderer::render_vlc_dropdown(int win_w, int win_h, double mouse_x, d
         if (it_hover) {
             draw_ui_rounded_rect(drop_x + 2.0f, it_y, card_w - 4.0f, item_h, 3.0f, 
                                  0.0f, 0.42f, 0.80f, 0.75f, 1.0f, win_w, win_h);
-            draw_ui_text(item.label, drop_x + 12.0f, it_y + 5.0f, 13.0f, 
+            draw_ui_text(item.label, drop_x + 12.0f, item_text_y, 13.0f, 
                          1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
         } else {
-            draw_ui_text(item.label, drop_x + 12.0f, it_y + 5.0f, 13.0f, 
+            draw_ui_text(item.label, drop_x + 12.0f, item_text_y, 13.0f, 
                          0.92f, 0.94f, 0.96f, 0.95f, 1.0f, win_w, win_h);
         }
 
         if (!item.shortcut.empty()) {
             float sc_w = get_text_width(item.shortcut, 12.0f);
             float sc_x = drop_x + card_w - sc_w - 12.0f;
-            draw_ui_text(item.shortcut, sc_x, it_y + 5.0f, 12.0f, 
+            draw_ui_text(item.shortcut, sc_x, item_text_y, 12.0f, 
                          0.60f, 0.66f, 0.75f, 0.90f, 1.0f, win_w, win_h);
         }
     }
@@ -1958,17 +2094,18 @@ void ShaderRenderer::render_vlc_context_menu(int win_w, int win_h, double mouse_
                          mouse_y >= it_y && mouse_y < it_y + item_h);
         bool is_sub_active = (static_cast<int>(i) == active_submenu_idx);
 
+        float item_text_y = it_y + 7.0f;
         if (it_hover || is_sub_active) {
             draw_ui_rounded_rect(root_x + 2.0f, it_y, card_w - 4.0f, item_h, 3.0f,
                                  0.0f, 0.42f, 0.80f, 0.75f, 1.0f, win_w, win_h);
-            draw_ui_text(vlc_menus[i].title, root_x + 12.0f, it_y + 5.0f, 13.0f,
+            draw_ui_text(vlc_menus[i].title, root_x + 12.0f, item_text_y, 13.0f,
                          1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
-            draw_ui_text(">", root_x + card_w - 16.0f, it_y + 5.0f, 13.0f,
+            draw_ui_text(">", root_x + card_w - 16.0f, item_text_y, 13.0f,
                          1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
         } else {
-            draw_ui_text(vlc_menus[i].title, root_x + 12.0f, it_y + 5.0f, 13.0f,
+            draw_ui_text(vlc_menus[i].title, root_x + 12.0f, item_text_y, 13.0f,
                          0.92f, 0.94f, 0.96f, 0.95f, 1.0f, win_w, win_h);
-            draw_ui_text(">", root_x + card_w - 16.0f, it_y + 5.0f, 13.0f,
+            draw_ui_text(">", root_x + card_w - 16.0f, item_text_y, 13.0f,
                          0.60f, 0.66f, 0.75f, 0.85f, 1.0f, win_w, win_h);
         }
     }
@@ -2062,7 +2199,7 @@ void ShaderRenderer::render_about_dialog(int win_w, int win_h, double mouse_x, d
 
     // Header Title & cyan indicator dot
     draw_ui_circle(card_x + 20.0f, card_y + 19.0f, 3.5f, 0.0f, 0.85f, 1.0f, 1.0f, 1.0f, win_w, win_h);
-    draw_ui_text("About VMP", card_x + 32.0f, card_y + 11.0f, 14.0f, 0.95f, 0.96f, 0.98f, 1.0f, 1.0f, win_w, win_h);
+    draw_ui_text("About VMP", card_x + 32.0f, card_y + 13.0f, 14.0f, 0.95f, 0.96f, 0.98f, 1.0f, 1.0f, win_w, win_h);
 
     // Close button [X] at top-right
     float close_sz = 24.0f;
@@ -2072,11 +2209,11 @@ void ShaderRenderer::render_about_dialog(int win_w, int win_h, double mouse_x, d
     if (close_hover) {
         draw_ui_rounded_rect(close_x, close_y, close_sz, close_sz, 5.0f, 0.85f, 0.22f, 0.28f, 0.90f, 1.0f, win_w, win_h);
         float x_w = get_text_width("X", 11.0f);
-        draw_ui_text("X", close_x + (close_sz - x_w) / 2.0f, close_y + 6.0f, 11.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
+        draw_ui_text("X", close_x + (close_sz - x_w) / 2.0f, close_y + 7.0f, 11.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
     } else {
         draw_ui_rounded_rect(close_x, close_y, close_sz, close_sz, 5.0f, 0.20f, 0.24f, 0.32f, 0.60f, 1.0f, win_w, win_h);
         float x_w = get_text_width("X", 11.0f);
-        draw_ui_text("X", close_x + (close_sz - x_w) / 2.0f, close_y + 6.0f, 11.0f, 0.70f, 0.75f, 0.85f, 0.90f, 1.0f, win_w, win_h);
+        draw_ui_text("X", close_x + (close_sz - x_w) / 2.0f, close_y + 7.0f, 11.0f, 0.70f, 0.75f, 0.85f, 0.90f, 1.0f, win_w, win_h);
     }
 
     // Logo & Header area
@@ -2093,8 +2230,8 @@ void ShaderRenderer::render_about_dialog(int win_w, int win_h, double mouse_x, d
 
     float badge_y = hero_y + 24.0f;
     draw_ui_rounded_rect(hero_tx, badge_y, 88.0f, 18.0f, 4.0f, 0.0f, 0.65f, 0.95f, 0.25f, 1.0f, win_w, win_h);
-    draw_ui_text("v0.0.3-beta", hero_tx + 8.0f, badge_y + 2.0f, 11.0f, 0.0f, 0.88f, 1.0f, 1.0f, 1.0f, win_w, win_h);
-    draw_ui_text("Linux C++20 High-Performance Engine", hero_tx + 98.0f, badge_y + 2.0f, 11.5f, 0.60f, 0.70f, 0.80f, 0.90f, 1.0f, win_w, win_h);
+    draw_ui_text("v0.0.3-beta", hero_tx + 8.0f, badge_y + 4.0f, 11.0f, 0.0f, 0.88f, 1.0f, 1.0f, 1.0f, win_w, win_h);
+    draw_ui_text("Linux C++20 High-Performance Engine", hero_tx + 98.0f, badge_y + 4.0f, 11.5f, 0.60f, 0.70f, 0.80f, 0.90f, 1.0f, win_w, win_h);
 
     // Separator line
     draw_ui_rect(card_x + 24.0f, card_y + 110.0f, card_w - 48.0f, 1.0f, 0.16f, 0.20f, 0.28f, 0.80f, 1.0f, win_w, win_h);
@@ -2145,12 +2282,12 @@ void ShaderRenderer::render_about_dialog(int win_w, int win_h, double mouse_x, d
     if (gh_hover) {
         draw_ui_rounded_rect(gh_x, gh_y, gh_w, gh_h, 6.0f, 0.0f, 0.78f, 1.0f, 0.95f, 1.0f, win_w, win_h);
         float tw = get_text_width("Open GitHub Repository", 12.0f);
-        draw_ui_text("Open GitHub Repository", gh_x + (gh_w - tw) / 2.0f, gh_y + 9.0f, 12.0f, 0.02f, 0.06f, 0.12f, 1.0f, 1.0f, win_w, win_h);
+        draw_ui_text("Open GitHub Repository", gh_x + (gh_w - tw) / 2.0f, gh_y + 11.0f, 12.0f, 0.02f, 0.06f, 0.12f, 1.0f, 1.0f, win_w, win_h);
     } else {
         draw_ui_rounded_rect(gh_x, gh_y, gh_w, gh_h, 6.0f, 0.0f, 0.55f, 0.85f, 0.25f, 1.0f, win_w, win_h);
         draw_ui_rounded_rect(gh_x + 1.0f, gh_y + 1.0f, gh_w - 2.0f, gh_h - 2.0f, 5.0f, 0.10f, 0.14f, 0.20f, 0.95f, 1.0f, win_w, win_h);
         float tw = get_text_width("Open GitHub Repository", 12.0f);
-        draw_ui_text("Open GitHub Repository", gh_x + (gh_w - tw) / 2.0f, gh_y + 9.0f, 12.0f, 0.0f, 0.85f, 1.0f, 0.95f, 1.0f, win_w, win_h);
+        draw_ui_text("Open GitHub Repository", gh_x + (gh_w - tw) / 2.0f, gh_y + 11.0f, 12.0f, 0.0f, 0.85f, 1.0f, 0.95f, 1.0f, win_w, win_h);
     }
 
     float cl_w = 90.0f;
@@ -2162,11 +2299,11 @@ void ShaderRenderer::render_about_dialog(int win_w, int win_h, double mouse_x, d
     if (cl_hover) {
         draw_ui_rounded_rect(cl_x, cl_y, cl_w, cl_h, 6.0f, 0.35f, 0.40f, 0.48f, 0.95f, 1.0f, win_w, win_h);
         float tw = get_text_width("Close", 13.0f);
-        draw_ui_text("Close", cl_x + (cl_w - tw) / 2.0f, cl_y + 9.0f, 13.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
+        draw_ui_text("Close", cl_x + (cl_w - tw) / 2.0f, cl_y + 11.0f, 13.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, win_w, win_h);
     } else {
         draw_ui_rounded_rect(cl_x, cl_y, cl_w, cl_h, 6.0f, 0.20f, 0.24f, 0.32f, 0.80f, 1.0f, win_w, win_h);
         float tw = get_text_width("Close", 13.0f);
-        draw_ui_text("Close", cl_x + (cl_w - tw) / 2.0f, cl_y + 9.0f, 13.0f, 0.85f, 0.88f, 0.92f, 1.0f, 1.0f, win_w, win_h);
+        draw_ui_text("Close", cl_x + (cl_w - tw) / 2.0f, cl_y + 11.0f, 13.0f, 0.85f, 0.88f, 0.92f, 1.0f, 1.0f, win_w, win_h);
     }
 }
 

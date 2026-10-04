@@ -6,6 +6,7 @@
 #include <string>
 #include <unordered_map>
 #include <GLFW/glfw3.h>
+#include "video_renderer_interface.h"
 
 struct FolderMediaItem {
     std::string filepath;
@@ -20,9 +21,36 @@ struct FolderMediaItem {
     int thumb_h = 0;
 };
 
+struct GalleryGeometry {
+    int num_cols = 5;
+    int num_rows = 0;
+    float pad_x = 24.0f;
+    float gap_x = 18.0f;
+    float gap_y = 20.0f;
+    float card_w = 0.0f;
+    float card_h = 0.0f;
+    float inner_pad = 7.0f;
+    float thumb_w = 0.0f;
+    float thumb_h = 0.0f;
+    float text_h = 64.0f;
+    float header_y = 0.0f;
+    float header_h = 56.0f;
+    float grid_top = 0.0f;
+    float total_content_h = 0.0f;
+    float view_height = 0.0f;
+    float max_scroll_y = 0.0f;
+    float sbar_x = 0.0f;
+    float sbar_w = 8.0f;
+    float sbar_track_y = 0.0f;
+    float sbar_track_h = 0.0f;
+    float thumb_h_bar = 0.0f;
+    float thumb_y_bar = 0.0f;
+};
+
 enum class VlcMenuAction {
     NONE = 0,
     MEDIA_OPEN_FILE,
+    MEDIA_OPEN_URL,
     MEDIA_OPEN_FOLDER,
     MEDIA_QUIT,
     PLAYBACK_TOGGLE_PAUSE,
@@ -54,7 +82,7 @@ struct VlcMenuCategory {
     float width = 0.0f;
 };
 
-class ShaderRenderer {
+class ShaderRenderer : public IVideoRenderer {
 public:
     enum class RenderMode {
         FIT,
@@ -72,22 +100,22 @@ public:
     };
 
     ShaderRenderer();
-    ~ShaderRenderer();
+    ~ShaderRenderer() override;
 
     bool init_gl_shaders();
     void upload_yuv_frame(uint8_t* y_plane, uint8_t* u_plane, uint8_t* v_plane,
                           int y_stride, int u_stride, int v_stride,
-                          int width, int height);
+                          int width, int height) override;
     void upload_nv12_frame(uint8_t* y_plane, uint8_t* uv_plane,
                            int y_stride, int uv_stride,
-                           int width, int height);
+                           int width, int height) override;
     void upload_p010_frame(uint8_t* y_plane, uint8_t* uv_plane,
                            int y_stride, int uv_stride,
-                           int width, int height);
+                           int width, int height) override;
     void upload_yuv10_frame(uint8_t* y_plane, uint8_t* u_plane, uint8_t* v_plane,
                             int y_stride, int u_stride, int v_stride,
-                            int width, int height);
-    void upload_rgb_frame(uint8_t* rgb_data, int width, int height);
+                            int width, int height) override;
+    void upload_rgb_frame(uint8_t* rgb_data, int width, int height) override;
     void upload_thumbnail_frame(const uint8_t* rgb_data, int width, int height);
     
     // Zoom and Pan transformations
@@ -127,18 +155,19 @@ public:
     void clear_video_frame();
     bool has_frame() const { return has_video_frame; }
 
-    void render(int window_width, int window_height, bool menu_bar_visible = true);
+    void render(int window_width, int window_height, bool menu_bar_visible = true) override;
     void render_ui_overlay(int window_width, int window_height, double current_sec, double total_sec, 
                            bool is_paused, bool is_fullscreen, float ui_alpha, double mouse_x, double mouse_y, 
                            bool is_scrubbing, bool show_stats, const std::string& video_name, 
                            const std::string& video_size, const std::string& video_date, 
                            const std::string& video_resolution, const std::string& codec_name, 
                            double fps, const std::string& hw_status, const std::string& active_subtitle,
-                           const std::string& osd_notification);
+                           const std::string& osd_notification, bool show_back_btn = true);
     void render_welcome_screen(int window_width, int window_height, double mouse_x, double mouse_y);
+    static GalleryGeometry get_gallery_geometry(int window_width, int window_height, size_t item_count, float scroll_y, bool is_fullscreen = false);
     void render_folder_gallery(int window_width, int window_height, double mouse_x, double mouse_y,
                                const std::string& folder_path, const std::vector<FolderMediaItem>& items,
-                               int scroll_offset, bool is_fullscreen = false);
+                               float scroll_y, bool is_fullscreen = false, bool is_dragging_scrollbar = false);
     static GLuint create_rgb_texture(const uint8_t* rgb_data, int width, int height);
     float get_text_width(const std::string& text, float font_size);
 
@@ -237,6 +266,7 @@ private:
     void draw_ui_rounded_rect(float x, float y, float w, float h, float radius, float r, float g, float b, float a, float ui_alpha, int win_w, int win_h);
     void draw_ui_circle(float cx, float cy, float radius, float r, float g, float b, float a, float ui_alpha, int win_w, int win_h);
     void draw_ui_icon(GLuint tex, float x, float y, float w, float h, float r, float g, float b, float a, float ui_alpha, int win_w, int win_h);
+    void draw_ui_rounded_icon(GLuint tex, float x, float y, float w, float h, float radius, float r, float g, float b, float a, float ui_alpha, int win_w, int win_h);
     void draw_ui_string(const std::string& text, float x, float y, float char_w, float char_h, float r, float g, float b, float a, float ui_alpha, int win_w, int win_h);
 };
 

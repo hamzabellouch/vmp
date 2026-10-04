@@ -30,7 +30,7 @@ void AudioEngine::sdl_audio_callback(void* userdata, Uint8* stream, int len) {
         // Calculate PTS of the exact sample being copied
         if (bytes_per_frame > 0 && engine->sample_rate > 0) {
             double sample_offset = static_cast<double>(chunk.read_offset / bytes_per_frame);
-            double exact_pts = chunk.pts + (sample_offset / engine->sample_rate);
+            double exact_pts = chunk.pts + (sample_offset * engine->playback_speed / engine->sample_rate);
             engine->current_playing_pts = exact_pts;
             engine->clock_initialized = true;
         }
@@ -73,7 +73,7 @@ void AudioEngine::sdl_audio_callback(void* userdata, Uint8* stream, int len) {
     engine->last_callback_time = std::chrono::high_resolution_clock::now();
 }
 
-bool AudioEngine::setup_swr(float speed) {
+bool AudioEngine::setup_swr() {
     if (swr_ctx) {
         swr_free(&swr_ctx);
         swr_ctx = nullptr;
@@ -83,11 +83,8 @@ bool AudioEngine::setup_swr(float speed) {
     AVChannelLayout out_ch_layout;
     av_channel_layout_default(&out_ch_layout, channels);
 
-    int in_rate = static_cast<int>(std::round(codec_sample_rate * speed));
-    if (in_rate < 8000) in_rate = 8000;
-
     int ret = swr_alloc_set_opts2(&swr_ctx, &out_ch_layout, AV_SAMPLE_FMT_S16, sample_rate,
-                                  &codec_ch_layout, codec_sample_fmt, in_rate, 0, NULL);
+                                  &codec_ch_layout, codec_sample_fmt, codec_sample_rate, 0, NULL);
     av_channel_layout_uninit(&out_ch_layout);
     if (ret < 0 || !swr_ctx) return false;
     return (swr_init(swr_ctx) >= 0);
@@ -140,7 +137,17 @@ bool AudioEngine::init_audio(AVCodecContext* codec_ctx) {
 
     sdl_buffer_samples = (obtained_spec.samples > 0) ? obtained_spec.samples : 1024;
 
-    if (!setup_swr(playback_speed)) {
+    if (sonic_stream) {
+        sonicDestroyStream(sonic_stream);
+        sonic_stream = nullptr;
+    }
+    sonic_stream = sonicCreateStream(sample_rate, channels);
+    if (sonic_stream) {
+        sonicSetSpeed(sonic_stream, playback_speed);
+        sonicSetPitch(sonic_stream, 1.0f); // Preserve 100% natural human pitch
+    }
+
+    if (!setup_swr()) {
         std::cerr << "[VMP Audio] Failed to setup SwrContext resampler." << std::endl;
         return false;
     }
@@ -179,18 +186,40 @@ void AudioEngine::play_chunk(AVFrame* frame, double pts_sec) {
         double duration_sec = static_cast<double>(converted) / sample_rate;
         next_expected_pts = actual_pts + duration_sec;
 
-        if (total_buffered_bytes + buffer_size > MAX_BUFFERED_BYTES * 2) {
+        std::vector<uint8_t> final_pcm_data;
+
+        if (sonic_stream && std::abs(playback_speed - 1.0f) > 0.01f) {
+            // Natural pitch-preserving time-stretching with Sonic (WSOLA / PICOLA)
+            sonicWriteShortToStream(sonic_stream, reinterpret_cast<const short*>(converted_data.data()), converted);
+            int available_samples = sonicSamplesAvailable(sonic_stream);
+            if (available_samples > 0) {
+                int out_bytes = available_samples * channels * sizeof(int16_t);
+                final_pcm_data.resize(out_bytes);
+                int read_samples = sonicReadShortFromStream(sonic_stream, reinterpret_cast<short*>(final_pcm_data.data()), available_samples);
+                if (read_samples > 0) {
+                    final_pcm_data.resize(read_samples * channels * sizeof(int16_t));
+                } else {
+                    final_pcm_data.clear();
+                }
+            }
+        } else {
+            final_pcm_data = std::move(converted_data);
+        }
+
+        if (final_pcm_data.empty()) return;
+
+        if (total_buffered_bytes + final_pcm_data.size() > MAX_BUFFERED_BYTES * 2) {
             // Prevent unbounded queue growth if audio device is stalled
             return;
         }
 
         AudioChunk chunk;
-        chunk.pcm_data = std::move(converted_data);
+        chunk.pcm_data = std::move(final_pcm_data);
         chunk.read_offset = 0;
         chunk.pts = actual_pts;
 
         audio_queue.push_back(std::move(chunk));
-        total_buffered_bytes += buffer_size;
+        total_buffered_bytes += chunk.pcm_data.size();
 
         if (!clock_initialized) {
             current_playing_pts = actual_pts;
@@ -224,7 +253,10 @@ void AudioEngine::set_playback_speed(float speed) {
     float clamped = std::max(0.25f, std::min(4.0f, speed));
     if (std::abs(playback_speed - clamped) > 0.01f) {
         playback_speed = clamped;
-        setup_swr(playback_speed);
+        if (sonic_stream) {
+            sonicSetSpeed(sonic_stream, playback_speed);
+            sonicSetPitch(sonic_stream, 1.0f); // Always preserve original natural voice pitch
+        }
     }
 }
 
@@ -256,6 +288,9 @@ void AudioEngine::flush() {
     clock_initialized = false;
     current_playing_pts = 0.0;
     next_expected_pts = 0.0;
+    if (sonic_stream) {
+        sonicFlushStream(sonic_stream);
+    }
 }
 
 double AudioEngine::get_audio_clock() {
@@ -289,6 +324,10 @@ void AudioEngine::close() {
     if (swr_ctx) {
         swr_free(&swr_ctx);
         swr_ctx = nullptr;
+    }
+    if (sonic_stream) {
+        sonicDestroyStream(sonic_stream);
+        sonic_stream = nullptr;
     }
     if (codec_info_saved) {
         av_channel_layout_uninit(&codec_ch_layout);

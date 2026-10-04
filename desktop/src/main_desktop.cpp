@@ -13,6 +13,8 @@
 #include "subtitles.h"
 #include "resume_manager.h"
 #include "thumbnail_generator.h"
+#include "config_manager.h"
+#include "mpris_manager.h"
 #include "material_icons_data.h"
 #include "app_icon_data.h"
 
@@ -196,6 +198,11 @@ static bool is_image_file(const std::string& path) {
 }
 
 static bool is_video_file(const std::string& path) {
+    if (path.rfind("http://", 0) == 0 || path.rfind("https://", 0) == 0 ||
+        path.rfind("rtsp://", 0) == 0 || path.rfind("rtmp://", 0) == 0 ||
+        path.rfind("udp://", 0) == 0 || path.rfind("tcp://", 0) == 0) {
+        return true;
+    }
     if (path.length() >= 5) {
         std::string lower_tail = path.substr(path.length() - 5);
         for (char& c : lower_tail) c = std::tolower(c);
@@ -533,6 +540,7 @@ int main(int argc, char** argv) {
     std::vector<SubtitleTrack> available_sub_tracks;
     int current_sub_track_idx = -1;
     auto last_resume_save = std::chrono::high_resolution_clock::now();
+    MprisManager mpris;
 
     // Lambda to load a file from playlist
     auto load_playlist_file_fn = [&](size_t idx) -> bool {
@@ -597,11 +605,13 @@ int main(int argc, char** argv) {
         }
         osd_notification_time = std::chrono::high_resolution_clock::now();
         
+        mpris.update_metadata(video_filename, player.get_duration());
+        mpris.update_playback_status("Playing");
+        
         return true;
     };
 
-    auto open_folder_dialog_fn = [&]() -> std::string {
-        std::string cmd = "zenity --file-selection --directory --title=\"Select Folder with Videos - VMP Player\" 2>/dev/null";
+    auto run_dialog_cmd = [](const std::string& cmd) -> std::string {
         FILE* fp = popen(cmd.c_str(), "r");
         if (!fp) return "";
         char buf[1024];
@@ -616,20 +626,48 @@ int main(int argc, char** argv) {
         return res;
     };
 
-    auto open_file_dialog_fn = [&]() -> std::string {
-        std::string cmd = "zenity --file-selection --title=\"Select Video File - VMP Player\" --file-filter=\"Video Files | *.mp4 *.mkv *.webm *.avi *.mov *.flv *.ts *.wmv\" 2>/dev/null";
-        FILE* fp = popen(cmd.c_str(), "r");
-        if (!fp) return "";
-        char buf[1024];
-        std::string res = "";
-        if (fgets(buf, sizeof(buf), fp)) {
-            res = buf;
-            while (!res.empty() && (res.back() == '\n' || res.back() == '\r')) {
-                res.pop_back();
-            }
+    auto open_folder_dialog_fn = [&]() -> std::string {
+        if (system("which zenity >/dev/null 2>&1") == 0) {
+            std::string res = run_dialog_cmd("zenity --file-selection --directory --title=\"Select Folder with Videos - VMP Player\" 2>/dev/null");
+            if (!res.empty()) return res;
         }
-        pclose(fp);
-        return res;
+        if (system("which kdialog >/dev/null 2>&1") == 0) {
+            std::string res = run_dialog_cmd("kdialog --getexistingdirectory . --title \"Select Folder with Videos - VMP Player\" 2>/dev/null");
+            if (!res.empty()) return res;
+        }
+        if (system("which qarma >/dev/null 2>&1") == 0) {
+            std::string res = run_dialog_cmd("qarma --file-selection --directory --title=\"Select Folder with Videos - VMP Player\" 2>/dev/null");
+            if (!res.empty()) return res;
+        }
+        return "";
+    };
+
+    auto open_file_dialog_fn = [&]() -> std::string {
+        if (system("which zenity >/dev/null 2>&1") == 0) {
+            std::string res = run_dialog_cmd("zenity --file-selection --title=\"Select Video File - VMP Player\" --file-filter=\"Video Files | *.mp4 *.mkv *.webm *.avi *.mov *.flv *.ts *.wmv *.m4v *.3gp *.ogv *.m2ts\" 2>/dev/null");
+            if (!res.empty()) return res;
+        }
+        if (system("which kdialog >/dev/null 2>&1") == 0) {
+            std::string res = run_dialog_cmd("kdialog --getopenfilename . \"*.mp4 *.mkv *.webm *.avi *.mov *.flv *.ts *.wmv *.m4v *.3gp *.ogv *.m2ts|Video Files\" --title \"Select Video File - VMP Player\" 2>/dev/null");
+            if (!res.empty()) return res;
+        }
+        if (system("which qarma >/dev/null 2>&1") == 0) {
+            std::string res = run_dialog_cmd("qarma --file-selection --title=\"Select Video File - VMP Player\" 2>/dev/null");
+            if (!res.empty()) return res;
+        }
+        return "";
+    };
+
+    auto open_url_dialog_fn = [&]() -> std::string {
+        if (system("which zenity >/dev/null 2>&1") == 0) {
+            std::string res = run_dialog_cmd("zenity --entry --title=\"Open Network Stream - VMP Player\" --text=\"Enter network stream URL (HTTP, HTTPS, RTSP, RTMP):\" 2>/dev/null");
+            if (!res.empty()) return res;
+        }
+        if (system("which kdialog >/dev/null 2>&1") == 0) {
+            std::string res = run_dialog_cmd("kdialog --inputbox \"Enter network stream URL (HTTP, HTTPS, RTSP, RTMP):\" --title \"Open Network Stream - VMP Player\" 2>/dev/null");
+            if (!res.empty()) return res;
+        }
+        return "";
     };
 
     enum class AppState {
@@ -640,7 +678,13 @@ int main(int argc, char** argv) {
     AppState app_state = AppState::WELCOME;
     std::string current_folder_path = "";
     std::vector<FolderMediaItem> folder_media_items;
-    int gallery_scroll_offset = 0;
+    float gallery_scroll_y = 0.0f;
+    float gallery_target_scroll_y = 0.0f;
+    bool gallery_is_dragging_scrollbar = false;
+    float gallery_drag_offset_y = 0.0f;
+    bool opened_from_gallery = false;
+    auto last_gallery_card_click_time = std::chrono::high_resolution_clock::time_point{};
+    int last_gallery_card_click_idx = -1;
 
     auto scan_folder_fn = [&](const std::string& dir_path) -> bool {
         current_folder_path = dir_path;
@@ -819,6 +863,7 @@ int main(int argc, char** argv) {
                 return 1;
             }
         } else {
+            opened_from_gallery = false;
             if (load_playlist_file_fn(0)) {
                 app_state = AppState::PLAYING;
             } else {
@@ -834,8 +879,40 @@ int main(int argc, char** argv) {
         }
     }
 
-    bool hdr_toggle = false;
+    ConfigManager& config = ConfigManager::get_instance();
+    bool hdr_toggle = config.get_bool("video", "hdr_tone_mapping", false);
     renderer.set_hdr_tone_mapping(hdr_toggle);
+    bool vsync_enabled = config.get_bool("video", "vsync", true);
+    glfwSwapInterval(vsync_enabled ? 1 : 0);
+    float initial_vol = config.get_float("audio", "volume", 1.0f);
+    player.set_volume(initial_vol);
+    if (config.get_bool("audio", "muted", false)) {
+        player.toggle_mute();
+    }
+
+    mpris.init({
+        /* on_play */ [&]() { player.set_paused(false); mpris.update_playback_status("Playing"); },
+        /* on_pause */ [&]() { player.set_paused(true); mpris.update_playback_status("Paused"); },
+        /* on_play_pause */ [&]() { player.toggle_pause(); mpris.update_playback_status(player.is_paused() ? "Paused" : "Playing"); },
+        /* on_stop */ [&]() { player.stop(); mpris.update_playback_status("Stopped"); app_state = AppState::WELCOME; },
+        /* on_next */ [&]() {
+            if (current_file_idx + 1 < playlist_files.size()) {
+                current_file_idx++;
+                load_playlist_file_fn(current_file_idx);
+            }
+        },
+        /* on_prev */ [&]() {
+            if (current_file_idx > 0) {
+                current_file_idx--;
+                load_playlist_file_fn(current_file_idx);
+            }
+        },
+        /* on_seek_relative */ [&](double offset) { player.seek_relative(offset); },
+        /* on_seek_absolute */ [&](double pos) { player.seek_to_time(pos); },
+        /* on_set_volume */ [&](float vol) { player.set_volume(vol); config.set_float("audio", "volume", vol); },
+        /* on_raise */ [&]() { glfwFocusWindow(window); },
+        /* on_quit */ [&]() { glfwSetWindowShouldClose(window, GLFW_TRUE); }
+    });
 
     auto last_title_update = std::chrono::high_resolution_clock::now();
     auto start_time_global = std::chrono::high_resolution_clock::now();
@@ -848,7 +925,7 @@ int main(int argc, char** argv) {
     bool p_pressed_prev = false;
     bool w_pressed_prev = false;
     bool v_pressed_prev = false;
-    bool vsync_enabled = true;
+    bool ctrl_n_pressed_prev = false;
     bool left_pressed_prev = false;
     bool right_pressed_prev = false;
     bool up_pressed_prev = false;
@@ -884,6 +961,7 @@ int main(int argc, char** argv) {
     auto last_video_click_time = std::chrono::high_resolution_clock::time_point{};
 
     while (!glfwWindowShouldClose(window)) {
+        mpris.update();
         int width, height;
         glfwGetFramebufferSize(window, &width, &height);
         if (width > 0 && height > 0) {
@@ -928,6 +1006,19 @@ int main(int argc, char** argv) {
                     if (!file.empty()) {
                         playlist_files = { file };
                         current_file_idx = 0;
+                        opened_from_gallery = false;
+                        if (load_playlist_file_fn(0)) {
+                            app_state = AppState::PLAYING;
+                        }
+                    }
+                    break;
+                }
+                case VlcMenuAction::MEDIA_OPEN_URL: {
+                    std::string url = open_url_dialog_fn();
+                    if (!url.empty()) {
+                        playlist_files = { url };
+                        current_file_idx = 0;
+                        opened_from_gallery = false;
                         if (load_playlist_file_fn(0)) {
                             app_state = AppState::PLAYING;
                         }
@@ -938,7 +1029,9 @@ int main(int argc, char** argv) {
                     std::string dir = open_folder_dialog_fn();
                     if (!dir.empty()) {
                         if (scan_folder_fn(dir)) {
-                            gallery_scroll_offset = 0;
+                            gallery_scroll_y = 0.0f;
+                            gallery_target_scroll_y = 0.0f;
+                            gallery_is_dragging_scrollbar = false;
                             app_state = AppState::FOLDER_GALLERY;
                         }
                     }
@@ -1100,7 +1193,7 @@ int main(int argc, char** argv) {
 
                 context_menu_active = false;
                 context_submenu_idx = -1;
-                return true;
+                return false;
             }
 
             if (is_fullscreen) return false;
@@ -1124,7 +1217,7 @@ int main(int argc, char** argv) {
                     return true;
                 }
                 active_menu_idx = -1;
-                return true;
+                return false;
             }
             return false;
         };
@@ -1152,7 +1245,9 @@ int main(int argc, char** argv) {
         for (const auto& d_path : dropped_to_process) {
             if (std::filesystem::is_directory(d_path)) {
                 if (scan_folder_fn(d_path)) {
-                    gallery_scroll_offset = 0;
+                    gallery_scroll_y = 0.0f;
+                    gallery_target_scroll_y = 0.0f;
+                    gallery_is_dragging_scrollbar = false;
                     app_state = AppState::FOLDER_GALLERY;
                 }
             } else {
@@ -1185,6 +1280,7 @@ int main(int argc, char** argv) {
                 } else {
                     playlist_files = { d_path };
                     current_file_idx = 0;
+                    opened_from_gallery = false;
                     if (load_playlist_file_fn(0)) {
                         app_state = AppState::PLAYING;
                     } else {
@@ -1202,7 +1298,9 @@ int main(int argc, char** argv) {
             std::string dir = open_folder_dialog_fn();
             if (!dir.empty()) {
                 if (scan_folder_fn(dir)) {
-                    gallery_scroll_offset = 0;
+                    gallery_scroll_y = 0.0f;
+                    gallery_target_scroll_y = 0.0f;
+                    gallery_is_dragging_scrollbar = false;
                     app_state = AppState::FOLDER_GALLERY;
                 } else {
                     osd_notification = "No media files in folder";
@@ -1213,6 +1311,24 @@ int main(int argc, char** argv) {
             o_pressed_prev = true;
         } else if (!o_pressed_now) {
             o_pressed_prev = false;
+        }
+
+        // Open Network Stream dialog shortcut (Ctrl+N)
+        bool ctrl_held_stream = (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS);
+        bool n_pressed_stream = (glfwGetKey(window, GLFW_KEY_N) == GLFW_PRESS);
+        if (ctrl_held_stream && n_pressed_stream && !ctrl_n_pressed_prev) {
+            std::string url = open_url_dialog_fn();
+            if (!url.empty()) {
+                playlist_files = { url };
+                current_file_idx = 0;
+                opened_from_gallery = false;
+                if (load_playlist_file_fn(0)) {
+                    app_state = AppState::PLAYING;
+                }
+            }
+            ctrl_n_pressed_prev = true;
+        } else if (!n_pressed_stream || !ctrl_held_stream) {
+            ctrl_n_pressed_prev = false;
         }
 
         // Toggle Folder Gallery shortcut (G key)
@@ -1239,16 +1355,17 @@ int main(int argc, char** argv) {
 
         // Mouse scroll in Gallery mode
         if (app_state == AppState::FOLDER_GALLERY) {
+            auto geom = ShaderRenderer::get_gallery_geometry(width, height, folder_media_items.size(), gallery_scroll_y, is_fullscreen);
             if (std::abs(g_scroll_y) > 0.01) {
-                float pad_x = 24.0f;
-                float gap_x = 18.0f;
-                float avail_w = static_cast<float>(width) - 2.0f * pad_x;
-                int num_cols = std::max(2, std::min(6, static_cast<int>((avail_w + gap_x) / 240.0f)));
-                int num_rows = (static_cast<int>(folder_media_items.size()) + num_cols - 1) / num_cols;
-
-                if (g_scroll_y > 0) gallery_scroll_offset = std::max(0, gallery_scroll_offset - 1);
-                else gallery_scroll_offset = std::min(std::max(0, num_rows - 1), gallery_scroll_offset + 1);
+                gallery_target_scroll_y -= static_cast<float>(g_scroll_y) * 110.0f;
+                gallery_target_scroll_y = std::clamp(gallery_target_scroll_y, 0.0f, geom.max_scroll_y);
                 g_scroll_y = 0.0;
+            }
+            if (!gallery_is_dragging_scrollbar) {
+                gallery_scroll_y += (gallery_target_scroll_y - gallery_scroll_y) * 0.28f;
+                if (std::abs(gallery_target_scroll_y - gallery_scroll_y) < 0.5f) {
+                    gallery_scroll_y = gallery_target_scroll_y;
+                }
             }
         }
 
@@ -1285,7 +1402,9 @@ int main(int argc, char** argv) {
                             std::string dir = open_folder_dialog_fn();
                             if (!dir.empty()) {
                                 if (scan_folder_fn(dir)) {
-                                    gallery_scroll_offset = 0;
+                                    gallery_scroll_y = 0.0f;
+                                    gallery_target_scroll_y = 0.0f;
+                                    gallery_is_dragging_scrollbar = false;
                                     app_state = AppState::FOLDER_GALLERY;
                                 }
                             }
@@ -1354,6 +1473,8 @@ int main(int argc, char** argv) {
 
         // Handle Folder Media Gallery
         if (app_state == AppState::FOLDER_GALLERY) {
+            auto geom = ShaderRenderer::get_gallery_geometry(width, height, folder_media_items.size(), gallery_scroll_y, is_fullscreen);
+
             if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
                 if (!mouse_left_prev) {
                     if (show_about_dialog) {
@@ -1366,59 +1487,71 @@ int main(int argc, char** argv) {
                         }
                     } else if (check_vlc_menu_click_fn()) {
                         // Handled by VLC menu bar
-                    } else {
-                        // Check "SELECT FOLDER" button on top right (adjusted below menu bar if not fullscreen)
-                        float menu_bar_h = is_fullscreen ? 0.0f : 28.0f;
-                        float header_y = menu_bar_h;
-                        float header_h = 56.0f;
-                        float chg_btn_w = 170.0f;
-                        float chg_btn_h = 32.0f;
-                        float chg_btn_x = width - chg_btn_w - 24.0f;
-                        float chg_btn_y = header_y + 12.0f;
-                        if (mx >= chg_btn_x && mx <= chg_btn_x + chg_btn_w && my >= chg_btn_y && my <= chg_btn_y + chg_btn_h) {
-                            std::string dir = open_folder_dialog_fn();
-                            if (!dir.empty()) {
-                                if (scan_folder_fn(dir)) {
-                                    gallery_scroll_offset = 0;
-                                }
+                    } else if (mx >= (width - 170.0f - 24.0f) && mx <= (width - 24.0f) &&
+                               my >= (geom.header_y + 12.0f) && my <= (geom.header_y + 44.0f)) {
+                        // Prioritize "SELECT FOLDER" button on top right (immediate single-click response)
+                        active_menu_idx = -1;
+                        context_menu_active = false;
+                        std::string dir = open_folder_dialog_fn();
+                        if (!dir.empty()) {
+                            if (scan_folder_fn(dir)) {
+                                gallery_scroll_y = 0.0f;
+                                gallery_target_scroll_y = 0.0f;
+                                gallery_is_dragging_scrollbar = false;
                             }
+                        }
+                    } else if (geom.max_scroll_y > 0.0f && mx >= geom.sbar_x - 8.0f && mx <= width &&
+                               my >= geom.sbar_track_y && my <= geom.sbar_track_y + geom.sbar_track_h) {
+                        // Click on Right-Side Scrollbar
+                        gallery_is_dragging_scrollbar = true;
+                        if (my >= geom.thumb_y_bar && my <= geom.thumb_y_bar + geom.thumb_h_bar) {
+                            gallery_drag_offset_y = static_cast<float>(my) - geom.thumb_y_bar;
                         } else {
-                            // Responsive grid hit-testing
-                            float grid_top = header_y + header_h + 16.0f;
-                            float pad_x = 24.0f;
-                            float gap_x = 18.0f;
-                            float gap_y = 20.0f;
-                            float avail_w = static_cast<float>(width) - 2.0f * pad_x;
+                            // Click on track: jump thumb center to click position
+                            float new_thumb_y = static_cast<float>(my) - geom.thumb_h_bar * 0.5f;
+                            float pct = (geom.sbar_track_h > geom.thumb_h_bar) ?
+                                        (new_thumb_y - geom.sbar_track_y) / (geom.sbar_track_h - geom.thumb_h_bar) : 0.0f;
+                            gallery_target_scroll_y = std::clamp(pct * geom.max_scroll_y, 0.0f, geom.max_scroll_y);
+                            gallery_scroll_y = gallery_target_scroll_y;
+                            gallery_drag_offset_y = geom.thumb_h_bar * 0.5f;
+                        }
+                    } else {
+                        // Responsive grid hit-testing: play video immediately on single click!
+                        for (size_t i = 0; i < folder_media_items.size(); i++) {
+                            int r = static_cast<int>(i) / geom.num_cols;
+                            int c = static_cast<int>(i) % geom.num_cols;
+                            float card_x = geom.pad_x + static_cast<float>(c) * (geom.card_w + geom.gap_x);
+                            float card_y = geom.grid_top + static_cast<float>(r) * (geom.card_h + geom.gap_y) - gallery_scroll_y;
 
-                            int num_cols = std::max(2, std::min(6, static_cast<int>((avail_w + gap_x) / 240.0f)));
-                            float card_w = (avail_w - (num_cols - 1) * gap_x) / num_cols;
-                            float thumb_h = card_w * (9.0f / 16.0f);
-                            float text_h = 56.0f;
-                            float card_h = thumb_h + text_h;
+                            // Only test visible cards below header
+                            if (card_y + geom.card_h < geom.grid_top || card_y > height) continue;
 
-                            for (size_t i = 0; i < folder_media_items.size(); i++) {
-                                int r = static_cast<int>(i) / num_cols;
-                                int c = static_cast<int>(i) % num_cols;
-                                int row_on_screen = r - gallery_scroll_offset;
-                                if (row_on_screen < 0) continue;
-
-                                float card_x = pad_x + c * (card_w + gap_x);
-                                float card_y = grid_top + row_on_screen * (card_h + gap_y);
-                                if (card_y + card_h > height + 50.0f) break;
-
-                                if (mx >= card_x && mx <= card_x + card_w && my >= card_y && my <= card_y + card_h) {
-                                    current_file_idx = i;
-                                    if (load_playlist_file_fn(current_file_idx)) {
-                                        app_state = AppState::PLAYING;
-                                    }
-                                    break;
+                            if (mx >= card_x && mx <= card_x + geom.card_w &&
+                                my >= std::max(geom.grid_top, card_y) && my <= std::min(static_cast<float>(height), card_y + geom.card_h)) {
+                                
+                                // SINGLE CLICK: Instantly play video from inside VMP gallery
+                                current_file_idx = i;
+                                opened_from_gallery = true;
+                                active_menu_idx = -1;
+                                context_menu_active = false;
+                                if (load_playlist_file_fn(current_file_idx)) {
+                                    app_state = AppState::PLAYING;
                                 }
+                                break;
                             }
                         }
                     }
                     mouse_left_prev = true;
+                } else if (gallery_is_dragging_scrollbar) {
+                    // Continuous dragging while mouse button is held
+                    float new_thumb_y = static_cast<float>(my) - gallery_drag_offset_y;
+                    float pct = (geom.sbar_track_h > geom.thumb_h_bar) ?
+                                (new_thumb_y - geom.sbar_track_y) / (geom.sbar_track_h - geom.thumb_h_bar) : 0.0f;
+                    gallery_target_scroll_y = std::clamp(pct * geom.max_scroll_y, 0.0f, geom.max_scroll_y);
+                    gallery_scroll_y = gallery_target_scroll_y;
                 }
             } else if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_RELEASE) {
+                gallery_is_dragging_scrollbar = false;
                 mouse_left_prev = false;
             }
 
@@ -1435,7 +1568,7 @@ int main(int argc, char** argv) {
                 mouse_right_prev = false;
             }
 
-            renderer.render_folder_gallery(width, height, mx, my, current_folder_path, folder_media_items, gallery_scroll_offset, is_fullscreen);
+            renderer.render_folder_gallery(width, height, mx, my, current_folder_path, folder_media_items, gallery_scroll_y, is_fullscreen, gallery_is_dragging_scrollbar);
             if (!is_fullscreen) {
                 renderer.render_vlc_menu_bar(width, height, mx, my, active_menu_idx, 1.0f);
                 if (active_menu_idx >= 0) {
@@ -1536,11 +1669,12 @@ int main(int argc, char** argv) {
                         int ret = system("xdg-open https://github.com/hamzabellouch/vmp >/dev/null 2>&1 &");
                         (void)ret;
                     }
-                } else if (check_vlc_menu_click_fn()) {
-                    // Handled by VLC menu bar or context menu
                 }
-                // Check click on BACK button (at top-left, frameless Material Symbols icon, in both windowed and fullscreen modes)
-                else if (mx >= back_btn_x - 4.0f && mx <= back_btn_x + back_btn_w + 4.0f && my >= back_btn_y - 4.0f && my <= back_btn_y + back_btn_h + 4.0f) {
+                // Check click on BACK button (top-left, only active when opened from inside VMP)
+                else if (opened_from_gallery && mx >= back_btn_x - 4.0f && mx <= back_btn_x + back_btn_w + 4.0f &&
+                         my >= back_btn_y - 4.0f && my <= back_btn_y + back_btn_h + 4.0f) {
+                    active_menu_idx = -1;
+                    context_menu_active = false;
                     if (!video_filename.empty() && current_file_idx < playlist_files.size()) {
                         ResumeManager::get_instance().save_position(playlist_files[current_file_idx], player.get_current_time(), player.get_duration());
                     }
@@ -1556,14 +1690,19 @@ int main(int argc, char** argv) {
                         app_state = AppState::WELCOME;
                     }
                 }
+                // Check click on Stats button icon (at top-right, in both windowed and fullscreen modes)
+                else if (mx >= stats_x - 10.0f && mx <= stats_x + icon_size + 10.0f &&
+                         my >= stats_y - 10.0f && my <= stats_y + icon_size + 10.0f) {
+                    show_stats = !show_stats;
+                    std::cout << "[VMP Engine] Toggle Stats Display: " << (show_stats ? "ON" : "OFF") << std::endl;
+                }
+                // Check VLC menu bar or context menu
+                else if (check_vlc_menu_click_fn()) {
+                    // Handled by VLC menu bar or context menu
+                }
                 // Check click on Fullscreen button icon (at bottom-right)
                 else if (mx >= fs_x - 12.0f && mx <= fs_x + icon_size + 12.0f && my >= fs_y - 12.0f && my <= fs_y + icon_size + 12.0f) {
                     toggle_fullscreen_fn(window);
-                }
-                // Check click on Stats button icon (at top-right, left of BACK, in both windowed and fullscreen modes)
-                else if (mx >= stats_x - 10.0f && mx <= stats_x + icon_size + 10.0f && my >= stats_y - 10.0f && my <= stats_y + icon_size + 10.0f) {
-                    show_stats = !show_stats;
-                    std::cout << "[VMP Engine] Toggle Stats Display: " << (show_stats ? "ON" : "OFF") << std::endl;
                 }
                 // Check click on Replay 5s button icon
                 else if (mx >= replay_x - 10.0f && mx <= replay_x + icon_size + 10.0f && my >= icon_y - 12.0f && my <= icon_y + icon_size + 12.0f) {
@@ -2204,10 +2343,10 @@ int main(int argc, char** argv) {
         VMPStats stats = player.get_stats();
         std::string video_res = std::to_string(stats.width) + "x" + std::to_string(stats.height);
         renderer.render_ui_overlay(width, height, player.get_current_time(), player.get_duration(), 
-                                   player.is_paused(), (is_fullscreen || glfwGetWindowAttrib(window, GLFW_MAXIMIZED)), ui_alpha, mx, my, is_scrubbing, 
+                                   player.is_paused(), is_fullscreen, ui_alpha, mx, my, is_scrubbing, 
                                    show_stats, video_filename, video_size, video_date, 
                                    video_res, stats.codec_name, stats.fps, stats.hw_acceleration_status,
-                                   active_sub, active_note);
+                                   active_sub, active_note, opened_from_gallery);
 
         if (!is_fullscreen) {
             renderer.render_vlc_menu_bar(width, height, mx, my, active_menu_idx, 1.0f);
@@ -2295,6 +2434,12 @@ int main(int argc, char** argv) {
         ResumeManager::get_instance().save_position(playlist_files[current_file_idx], player.get_current_time(), player.get_duration());
     }
     ResumeManager::get_instance().flush();
+
+    config.set_float("audio", "volume", player.get_volume());
+    config.set_bool("audio", "muted", player.is_muted());
+    config.set_bool("video", "vsync", vsync_enabled);
+    config.set_bool("video", "hdr_tone_mapping", hdr_toggle);
+    config.save();
 
     if (!export_filepath.empty()) {
         VMPStats stats = player.get_stats();

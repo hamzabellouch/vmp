@@ -68,6 +68,12 @@ bool VideoPlayer::open_file(const std::string& filepath) {
     std::cout << "\n[VMP Engine] Opening media file: " << filepath << std::endl;
     close_file();
 
+    static bool s_net_init = false;
+    if (!s_net_init) {
+        avformat_network_init();
+        s_net_init = true;
+    }
+
     // Check extension
     std::string ext = "";
     size_t dot_pos = filepath.find_last_of('.');
@@ -85,7 +91,24 @@ bool VideoPlayer::open_file(const std::string& filepath) {
         return false;
     }
 
-    int err = avformat_open_input(&fmt_ctx, filepath.c_str(), NULL, NULL);
+    AVDictionary* options = nullptr;
+    bool is_net = (filepath.rfind("http://", 0) == 0 || filepath.rfind("https://", 0) == 0 ||
+                   filepath.rfind("rtsp://", 0) == 0 || filepath.rfind("rtmp://", 0) == 0 ||
+                   filepath.rfind("udp://", 0) == 0 || filepath.rfind("tcp://", 0) == 0);
+    if (is_net) {
+        av_dict_set(&options, "timeout", "8000000", 0);
+        av_dict_set(&options, "reconnect", "1", 0);
+        av_dict_set(&options, "reconnect_streamed", "1", 0);
+        av_dict_set(&options, "reconnect_delay_max", "5", 0);
+        if (filepath.rfind("rtsp://", 0) == 0) {
+            av_dict_set(&options, "rtsp_transport", "tcp", 0);
+        }
+    }
+
+    int err = avformat_open_input(&fmt_ctx, filepath.c_str(), NULL, &options);
+    if (options) {
+        av_dict_free(&options);
+    }
     if (err < 0) {
         char errbuf[256];
         av_strerror(err, errbuf, sizeof(errbuf));
@@ -570,7 +593,7 @@ void VideoPlayer::decode_loop() {
     av_packet_free(&packet);
 }
 
-void VideoPlayer::render_current_frame(ShaderRenderer& renderer, int win_w, int win_h, bool menu_bar_visible) {
+void VideoPlayer::render_current_frame(IVideoRenderer& renderer, int win_w, int win_h, bool menu_bar_visible) {
     bool upload_needed = false;
     AVPixelFormat upload_format = AV_PIX_FMT_NONE;
 

@@ -4,12 +4,14 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 echo "=== Installing VMP (Video Max Player) for Linux Desktop ==="
 
-# 1. Build if not already built
-mkdir -p build
-cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j$(nproc)
+# 1. Build unified suite from root if not already built
+mkdir -p "$ROOT_DIR/build"
+cmake -B "$ROOT_DIR/build" -S "$ROOT_DIR" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$ROOT_DIR/build" -j$(nproc)
 
 # 2. Create required standard directories
 mkdir -p "$HOME/.local/share/applications"
@@ -20,38 +22,28 @@ mkdir -p "$HOME/Desktop"
 
 # 3. Copy application icon
 ICON_SVG="$SCRIPT_DIR/assets/icons/vmp_app_icon.svg"
-if [ ! -f "$ICON_SVG" ]; then
-    ICON_SVG="$SCRIPT_DIR/assets/icons/oculus_app_icon.svg"
-fi
 ICON_PNG="$SCRIPT_DIR/assets/icons/vmp_app_icon.png"
-if [ ! -f "$ICON_PNG" ]; then
-    ICON_PNG="$SCRIPT_DIR/assets/icons/oculus_app_icon.png"
-fi
 
 if [ -f "$ICON_SVG" ]; then
     cp -f "$ICON_SVG" "$HOME/.local/share/icons/hicolor/scalable/apps/vmp.svg"
-    cp -f "$ICON_SVG" "$HOME/.local/share/icons/hicolor/scalable/apps/oculus.svg"
 fi
 for sz in 16 24 32 48 64 128 256 512; do
     mkdir -p "$HOME/.local/share/icons/hicolor/${sz}x${sz}/apps"
     if [ -f "$ICON_SVG" ] && command -v magick &> /dev/null; then
         magick -background none "$ICON_SVG" -resize "${sz}x${sz}" "$HOME/.local/share/icons/hicolor/${sz}x${sz}/apps/vmp.png"
-        magick -background none "$ICON_SVG" -resize "${sz}x${sz}" "$HOME/.local/share/icons/hicolor/${sz}x${sz}/apps/oculus.png"
     elif [ -f "$ICON_PNG" ]; then
         cp -f "$ICON_PNG" "$HOME/.local/share/icons/hicolor/${sz}x${sz}/apps/vmp.png"
-        cp -f "$ICON_PNG" "$HOME/.local/share/icons/hicolor/${sz}x${sz}/apps/oculus.png"
     fi
 done
 
 # 4. Configure and install .desktop file
 DESKTOP_SRC="$SCRIPT_DIR/vmp.desktop"
-if [ ! -f "$DESKTOP_SRC" ]; then
-    DESKTOP_SRC="$SCRIPT_DIR/oculus.desktop"
-fi
 DESKTOP_TARGET="$HOME/.local/share/applications/vmp.desktop"
 DESKTOP_SHORTCUT="$HOME/Desktop/VMP.desktop"
 
-sed "s|Exec=vmp_engine|Exec=$SCRIPT_DIR/build/vmp_engine|g; s|Exec=oculus_engine|Exec=$SCRIPT_DIR/build/vmp_engine|g" "$DESKTOP_SRC" > "$DESKTOP_TARGET"
+ENGINE_BIN="$ROOT_DIR/build/desktop/vmp_engine"
+
+sed "s|Exec=vmp_engine|Exec=$ENGINE_BIN|g" "$DESKTOP_SRC" > "$DESKTOP_TARGET"
 chmod +x "$DESKTOP_TARGET"
 
 cp "$DESKTOP_TARGET" "$DESKTOP_SHORTCUT"
@@ -62,17 +54,12 @@ if command -v gio &> /dev/null; then
 fi
 
 # 5. Install CLI tool (if built)
-CLI_BIN="$SCRIPT_DIR/../cli/build/vmp_cli"
-if [ ! -f "$CLI_BIN" ]; then
-    CLI_BIN="$SCRIPT_DIR/../cli/build/oculus_cli"
-fi
+CLI_BIN="$ROOT_DIR/build/cli/vmp_cli"
 if [ -f "$CLI_BIN" ]; then
     mkdir -p "$HOME/.local/bin"
     cp -f "$CLI_BIN" "$HOME/.local/bin/vmp_cli"
     chmod +x "$HOME/.local/bin/vmp_cli"
     ln -sf "$HOME/.local/bin/vmp_cli" "$HOME/.local/bin/vmp-cli"
-    ln -sf "$HOME/.local/bin/vmp_cli" "$HOME/.local/bin/oculus_cli"
-    ln -sf "$HOME/.local/bin/vmp_cli" "$HOME/.local/bin/oculus-cli"
 fi
 
 # 6. Update desktop database
@@ -83,11 +70,11 @@ if command -v gtk-update-icon-cache &> /dev/null; then
     gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 fi
 
-# 7. Disassociate VMP and Oculus from all image formats (prevent overriding default image viewer)
+# 7. Disassociate VMP from all image formats (prevent overriding default image viewer)
 for img_mime in image/png image/jpeg image/jpg image/bmp image/svg+xml image/webp image/gif image/tiff; do
     if command -v xdg-mime &> /dev/null; then
         curr_def=$(xdg-mime query default "$img_mime" 2>/dev/null || true)
-        if [ "$curr_def" = "vmp.desktop" ] || [ "$curr_def" = "VMP.desktop" ] || [ "$curr_def" = "oculus.desktop" ] || [ "$curr_def" = "Oculus.desktop" ]; then
+        if [ "$curr_def" = "vmp.desktop" ] || [ "$curr_def" = "VMP.desktop" ]; then
             for v in org.xfce.ristretto.desktop ristretto.desktop org.gnome.eog.desktop eog.desktop gwenview.desktop; do
                 if [ -f "/usr/share/applications/$v" ]; then
                     xdg-mime default "$v" "$img_mime" 2>/dev/null || true
@@ -106,9 +93,6 @@ if [ -f "$MIMEAPPS" ]; then
     for img_mime in image/png image/jpeg image/jpg image/bmp image/svg+xml image/webp image/gif image/tiff; do
         if ! grep -q "^$img_mime=.*vmp\.desktop" "$MIMEAPPS"; then
             echo "$img_mime=vmp.desktop;" >> "$MIMEAPPS"
-        fi
-        if ! grep -q "^$img_mime=.*oculus\.desktop" "$MIMEAPPS"; then
-            echo "$img_mime=oculus.desktop;" >> "$MIMEAPPS"
         fi
     done
 fi

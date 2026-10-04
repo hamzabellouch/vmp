@@ -12,6 +12,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libswresample/swresample.h>
+#include "sonic.h"
 }
 
 struct AudioChunk {
@@ -61,12 +62,14 @@ private:
     double next_expected_pts = 0.0;
     int sdl_buffer_samples = 1024;
 
-    // Codec parameters for speed-adjusted resampling
+    // Codec parameters for nominal resampling
     int codec_sample_rate = 44100;
     AVSampleFormat codec_sample_fmt = AV_SAMPLE_FMT_NONE;
     AVChannelLayout codec_ch_layout{};
     bool codec_info_saved = false;
-    bool setup_swr(float speed);
+    bool setup_swr();
+
+    sonicStream sonic_stream = nullptr;
 
     static void sdl_audio_callback(void* userdata, Uint8* stream, int len);
     std::mutex audio_mutex;

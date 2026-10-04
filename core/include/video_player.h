@@ -8,6 +8,7 @@
 #include <mutex>
 #include <queue>
 #include <string>
+#include <vector>
 
 extern "C" {
 #include <libswscale/swscale.h>
@@ -15,8 +16,7 @@ extern "C" {
 
 #include "hw_decoder.h"
 #include "audio_engine.h"
-
-class ShaderRenderer;
+#include "video_renderer_interface.h"
 
 struct QueuedVideoFrame {
     AVFrame* frame = nullptr;
@@ -36,7 +36,6 @@ struct VMPStats {
     std::string hw_acceleration_status;
     bool has_audio = false;
 };
-using OculusStats = VMPStats;
 
 class VideoPlayer {
 public:
@@ -57,7 +56,7 @@ public:
     double get_duration() const { return duration_sec; }
     double get_stream_fps() const { return stream_fps; }
     
-    void render_current_frame(ShaderRenderer& renderer, int win_w, int win_h, bool menu_bar_visible = true);
+    void render_current_frame(IVideoRenderer& renderer, int win_w, int win_h, bool menu_bar_visible = true);
     
     VMPStats get_stats();
     bool is_playing() const { return playing; }

@@ -44,7 +44,6 @@ VMP/
 │   ├── install.sh       # System desktop shortcut, icons & menu installer
 │   ├── vmp.desktop      # Linux desktop application entry (video MIME types only)
 │   ├── assets/          # Application icons and visual assets
-│   ├── generate_icons.py# Icon generator script (16x16 to 512x512 PNG + SVG)
 │   └── src/             # Source files for OpenGL, GLFW, and post-processing shaders
 │       ├── main_desktop.cpp
 │       ├── shader_renderer.*
