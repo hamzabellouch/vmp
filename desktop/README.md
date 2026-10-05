@@ -165,3 +165,9 @@ rm -f ~/.local/bin/vmp_engine
 rm -f ~/.local/share/icons/hicolor/scalable/apps/vmp.svg
 rm -f ~/.local/share/icons/hicolor/*/apps/vmp.png
 ```
+
+---
+
+## 📄 License
+
+This project is licensed under the **Apache License 2.0**. See the [LICENSE](../LICENSE) file for details.

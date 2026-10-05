@@ -21,22 +21,20 @@ Currently available for Linux OS (Ubuntu, Debian, Kali Linux, Parrot OS, Fedora,
 
 ## Repository Directory Structure
 
-The project is cleanly separated into two standalone, modular sub-projects:
+The project is cleanly modularized into a shared core engine library and dedicated frontends:
 
 ```
 VMP/
+├── core/                # Shared Core Media Engine Library (libvmp_core)
+│   ├── CMakeLists.txt   # Core static engine build target
+│   ├── include/         # Public headers (HW decoder, audio, telemetry, config, etc.)
+│   └── src/             # Core implementation (FFmpeg decoding, AVX2, SDL2 audio, etc.)
+│
 ├── cli/                 # [Sub-Project 1]: Command-Line Interface (Headless)
 │   ├── CMakeLists.txt   # Standalone build configuration (zero OpenGL/GLFW dependencies)
 │   ├── README.md        # CLI documentation and commands
-│   └── src/             # Source files for CLI, probe, benchmarks, and audio
-│       ├── main_cli.cpp
-│       ├── hw_decoder.*
-│       ├── audio_engine.*
-│       ├── telemetry.*
-│       ├── video_player.*
-│       ├── subtitles.*
-│       ├── resume_manager.*
-│       └── thumbnail_generator.*
+│   └── src/             # Source files for CLI, probe, benchmarks, and telemetry
+│       └── main_cli.cpp
 │
 ├── desktop/             # [Sub-Project 2]: Desktop GUI Application
 │   ├── CMakeLists.txt   # Standalone build configuration for GUI & shared library
@@ -44,14 +42,18 @@ VMP/
 │   ├── install.sh       # System desktop shortcut, icons & menu installer
 │   ├── vmp.desktop      # Linux desktop application entry (video MIME types only)
 │   ├── assets/          # Application icons and visual assets
-│   └── src/             # Source files for OpenGL, GLFW, and post-processing shaders
+│   └── src/             # Source files for OpenGL 3.3 Core, MPRIS, and shaders
 │       ├── main_desktop.cpp
 │       ├── shader_renderer.*
-│       └── ...
+│       └── mpris_manager.*
 │
-├── CMakeLists.txt       # Root build orchestrator (builds both targets)
+├── CMakeLists.txt       # Root build orchestrator (builds core, cli, and desktop)
 ├── README.md            # Markdown documentation (Linux installation & guide)
-└── LICENSE              # MIT License
+├── LICENSE              # Apache License 2.0
+├── SECURITY.md          # Security policy and vulnerability disclosure
+├── CONTRIBUTING.md      # Contribution guidelines
+├── CODE_OF_CONDUCT.md   # Contributor Covenant Code of Conduct
+└── PRIVACY_POLICY.md    # Offline & privacy guarantee policy
 ```
 
 
@@ -479,6 +481,13 @@ Tested on native Linux x86_64 playing high-bitrate 4K 60FPS / 120FPS video strea
 
 > [!WARNING]
 > VMP (Video Max Player) is strictly dedicated to high-performance video playback. It does not support opening or viewing static images. Image file inputs are immediately rejected with exit code `1` to prevent overriding your system's default image viewer. We assume no responsibility for any misuse or unsupported file overrides.
+
+
+
+## License
+
+This project is licensed under the **Apache License 2.0**. See the [LICENSE](LICENSE) file for the full license text.
+
 
 
 ### <a name="Copyright©2026"></a> Copyright © 2026

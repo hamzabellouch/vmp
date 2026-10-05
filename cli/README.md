@@ -125,3 +125,9 @@ rm -f ~/.local/bin/vmp_cli ~/.local/bin/vmp-cli
 # Or if installed system-wide:
 sudo rm -f /usr/local/bin/vmp_cli /usr/local/bin/vmp-cli
 ```
+
+---
+
+## 📄 License
+
+This project is licensed under the **Apache License 2.0**. See the [LICENSE](../LICENSE) file for details.
