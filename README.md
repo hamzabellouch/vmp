@@ -483,13 +483,6 @@ Tested on native Linux x86_64 playing high-bitrate 4K 60FPS / 120FPS video strea
 > VMP (Video Max Player) is strictly dedicated to high-performance video playback. It does not support opening or viewing static images. Image file inputs are immediately rejected with exit code `1` to prevent overriding your system's default image viewer. We assume no responsibility for any misuse or unsupported file overrides.
 
 
-
-## License
-
-This project is licensed under the **Apache License 2.0**. See the [LICENSE](LICENSE) file for the full license text.
-
-
-
 ### <a name="Copyright©2026"></a> Copyright © 2026
 
 Thank you for engaging with us. For inquiries or collaboration, please contact:  
